@@ -1,0 +1,4 @@
+run,backend,model,wall_s,ttft_approx_s,tokens,tokens_per_s,host_cpu_pct,host_ram_pct,pipeline_s,output_used,bullets_replaced,label
+1,ollama,qwen2.5:1.5b,2.377,0.033,38,166.34,9.2,27.2,2.378,model,0,MEASURED (host)
+2,ollama,qwen2.5:1.5b,2.339,0.011,45,167.48,9.0,27.2,2.339,model,0,MEASURED (host)
+3,ollama,qwen2.5:1.5b,2.361,0.018,44,167.66,15.1,27.2,2.362,model,0,MEASURED (host)

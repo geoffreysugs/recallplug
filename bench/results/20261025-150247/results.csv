@@ -1,0 +1,11 @@
+scenario,run,backend,model,wall_s,ttft_approx_s,tokens,tokens_per_s,host_cpu_pct,host_ram_pct,pipeline_s,output_used,bullets_replaced,condense_retries,label
+office,1,none,,,,,,,,0.0,rule_only,,0,MEASURED (host)
+office,2,none,,,,,,,,0.0,rule_only,,0,MEASURED (host)
+office,3,none,,,,,,,,0.0,rule_only,,0,MEASURED (host)
+office,4,none,,,,,,,,0.0,rule_only,,0,MEASURED (host)
+office,5,none,,,,,,,,0.0,rule_only,,0,MEASURED (host)
+web_heavy,1,none,,,,,,,,0.0,rule_only,,0,MEASURED (host)
+web_heavy,2,none,,,,,,,,0.0,rule_only,,0,MEASURED (host)
+web_heavy,3,none,,,,,,,,0.0,rule_only,,0,MEASURED (host)
+web_heavy,4,none,,,,,,,,0.0,rule_only,,0,MEASURED (host)
+web_heavy,5,none,,,,,,,,0.0,rule_only,,0,MEASURED (host)

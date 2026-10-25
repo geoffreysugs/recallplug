@@ -1,0 +1,4 @@
+timestamp,model,load_s,ttft_approx_s,tokens,tokens_per_s,wall_s,host_cpu_pct,host_ram_pct,label
+2026-10-25 00:45:58,qwen2.5:1.5b,2.033,2.067,53,153.88,4.53,16.1,35.6,"MEASURED (host, Ollama)"
+2026-10-25 00:48:48,qwen2.5:1.5b,0.01,0.025,46,166.54,2.426,10.6,35.8,"MEASURED (host, Ollama)"
+2026-10-25 00:50:03,qwen2.5:1.5b,0.013,0.027,76,166.08,2.556,10.7,35.6,"MEASURED (host, Ollama)"

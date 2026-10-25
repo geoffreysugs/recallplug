@@ -1,0 +1,11 @@
+scenario,run,backend,model,wall_s,ttft_approx_s,tokens,tokens_per_s,host_cpu_pct,host_ram_pct,pipeline_s,output_used,bullets_replaced,condense_retries,label
+office,1,mock,mock,0.0,0.0,19,0.0,100.0,24.3,0.001,model,0,0,MEASURED (host)
+office,2,mock,mock,0.0,0.0,19,0.0,0.0,24.3,0.001,model,0,0,MEASURED (host)
+office,3,mock,mock,0.0,0.0,19,0.0,0.0,24.3,0.0,model,0,0,MEASURED (host)
+office,4,mock,mock,0.0,0.0,19,0.0,0.0,24.3,0.0,model,0,0,MEASURED (host)
+office,5,mock,mock,0.0,0.0,19,0.0,0.0,24.3,0.0,model,0,0,MEASURED (host)
+web_heavy,1,mock,mock,0.0,0.0,23,0.0,0.0,24.3,0.001,model,0,0,MEASURED (host)
+web_heavy,2,mock,mock,0.0,0.0,23,0.0,0.0,24.3,0.0,model,0,0,MEASURED (host)
+web_heavy,3,mock,mock,0.0,0.0,23,0.0,0.0,24.3,0.0,model,0,0,MEASURED (host)
+web_heavy,4,mock,mock,0.0,0.0,23,0.0,0.0,24.3,0.0,model,0,0,MEASURED (host)
+web_heavy,5,mock,mock,0.0,0.0,23,0.0,0.0,24.2,0.0,model,0,0,MEASURED (host)

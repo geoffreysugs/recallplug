@@ -1,0 +1,7 @@
+scenario,run,backend,model,wall_s,ttft_approx_s,tokens,tokens_per_s,host_cpu_pct,host_ram_pct,pipeline_s,output_used,bullets_replaced,label
+office,1,ollama,qwen2.5:1.5b,2.915,2.742,13,129.82,14.7,29.0,2.915,model,0,MEASURED (host)
+office,2,ollama,qwen2.5:1.5b,0.12,0.02,13,162.49,22.6,29.0,0.12,model,0,MEASURED (host)
+office,3,ollama,qwen2.5:1.5b,0.122,0.02,13,163.73,19.6,29.0,0.123,model,0,MEASURED (host)
+web_heavy,1,ollama,qwen2.5:1.5b,0.122,0.024,12,158.32,17.4,29.0,0.122,mixed,1,MEASURED (host)
+web_heavy,2,ollama,qwen2.5:1.5b,0.11,0.017,12,186.55,11.6,29.0,0.111,mixed,1,MEASURED (host)
+web_heavy,3,ollama,qwen2.5:1.5b,0.181,0.022,23,171.38,10.0,29.0,0.182,model,0,MEASURED (host)
