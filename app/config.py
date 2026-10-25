@@ -68,6 +68,8 @@ class Config:
         "task switching",
         "工作檢視",   # 工作檢視 (Task View, Chinese)
         "task view",
+        "剪取工具重疊",   # 剪取工具重疊 (Snipping Tool overlay, Chinese)
+        "snipping tool overlay",
     )
 
     # ---- Where timing numbers are saved (contains NO window titles; "" = off)

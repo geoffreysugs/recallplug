@@ -75,6 +75,12 @@ class TitleTests(unittest.TestCase):
         self.assertFalse(is_blocked("Task View settings guide - Google Chrome", cfg))
         self.assertFalse(is_blocked("工作檢視.txt - 記事本", cfg))
 
+    def test_snipping_tool_overlay_is_blocked_but_normal_pages_are_logged(self):
+        cfg = Config()
+        for title in ["剪取工具重疊", "Snipping Tool Overlay", "  snipping tool overlay "]:
+            self.assertTrue(is_blocked(title, cfg), title)
+        self.assertFalse(is_blocked("Snipping tool tips - Google Chrome", cfg))
+
     def test_blocked(self):
         cfg = Config()
         self.assertTrue(is_blocked("", cfg))
