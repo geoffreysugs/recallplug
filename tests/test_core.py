@@ -6,10 +6,13 @@ import tempfile
 import threading
 import time
 import unittest
+from collections import namedtuple
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 from app.config import Config
+from app.inference import base
+from app.inference.ollama_backend import CpuPeak, busy_pct
 from app.main import format_away
 from app.hud import MIN_HEIGHT, TASKBAR_MARGIN, hud_geometry
 from app.summarizer import (EXAMPLE_TITLES, build_prompt, cap_text, check_next, check_work,
@@ -474,8 +477,11 @@ class _FakeOllama(BaseHTTPRequestHandler):
     condensed = ""                       # answer to a "Rewrite this sentence" prompt
 
     def do_POST(self):
-        prompt = json.loads(self.rfile.read(int(self.headers["Content-Length"])))["prompt"]
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        prompt = body["prompt"]
         self.server.prompts.append(prompt)
+        if hasattr(self.server, "bodies"):
+            self.server.bodies.append(body)
         payload = {
             "response": self.condensed if prompt.startswith("Rewrite") else self.response,
             "load_duration": 500_000_000, "prompt_eval_duration": 250_000_000,
@@ -641,9 +647,83 @@ class OllamaIntegrationTests(unittest.TestCase):
     def test_metrics_column_order(self):
         with tempfile.TemporaryDirectory() as tmp:
             _, cfg, _ = _summarize_with(_FakeOllama, [Entry(1, "Q3 Forecast.xlsx", "Excel")], tmp)
-            self.assertEqual(list(_read_rows(cfg.metrics_csv)[0])[-4:],
+            self.assertEqual(list(_read_rows(cfg.metrics_csv)[0])[-5:],
                              ["output_used", "bullets_replaced", "condense_retries",
-                              "next_names_last_two"])
+                              "next_names_last_two", "cpu_only"])
+
+    def test_cpu_only_sends_num_gpu_0_and_is_logged(self):
+        for cpu_only in (False, True):
+            server = HTTPServer(("127.0.0.1", 0), _FakeOllama)
+            server.prompts, server.bodies = [], []
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            cfg = Config()
+            cfg.cpu_only = cpu_only
+            cfg.ollama_url = f"http://127.0.0.1:{server.server_port}/api/generate"
+            with tempfile.TemporaryDirectory() as tmp:
+                cfg.metrics_csv = str(Path(tmp) / "m.csv")
+                try:
+                    result = summarize([Entry(1, "Q3 Forecast.xlsx", "Excel")], cfg)
+                finally:
+                    server.shutdown()
+                    server.server_close()
+                row = _read_rows(cfg.metrics_csv)[0]
+            options = server.bodies[0]["options"]
+            self.assertEqual(result["source"], "model")
+            self.assertEqual(row["cpu_only"], str(cpu_only).lower())
+            if cpu_only:
+                self.assertEqual(options["num_gpu"], 0)
+                self.assertEqual(row["label"], "MEASURED (host, Ollama, CPU only)")
+            else:
+                self.assertNotIn("num_gpu", options)
+                self.assertEqual(row["label"], "MEASURED (host, Ollama)")
+            self.assertEqual(server.bodies[0]["model"], "qwen2.5:1.5b")
+
+    def test_metrics_have_average_and_peak_cpu(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result, cfg, _ = _summarize_with(_FakeOllama, [Entry(1, "Q3 Forecast.xlsx", "Excel")], tmp)
+            row = _read_rows(cfg.metrics_csv)[0]
+        m = result["metrics"]
+        self.assertIn("host_cpu_pct", m)
+        self.assertIn("host_cpu_peak_pct", m)
+        self.assertEqual(list(row).index("host_cpu_peak_pct"), list(row).index("host_cpu_pct") + 1)
+        if base.psutil:
+            self.assertTrue(0.0 <= m["host_cpu_peak_pct"] <= 100.0)
+        else:
+            self.assertEqual(m["host_cpu_peak_pct"], "")
+
+    def test_busy_pct_formula(self):
+        T = namedtuple("T", "user system idle")
+        self.assertEqual(busy_pct(T(0, 0, 0), T(30, 20, 50)), 50.0)
+        self.assertEqual(busy_pct(T(10, 10, 10), T(10, 10, 20)), 0.0)
+        self.assertEqual(busy_pct(T(0, 0, 0), T(0, 0, 0)), 0.0)          # no time passed
+        L = namedtuple("L", "user system idle iowait")
+        self.assertEqual(busy_pct(L(0, 0, 0, 0), L(25, 0, 50, 25)), 25.0)  # iowait counts as idle
+
+    def test_cpu_peak_without_psutil_is_blank(self):
+        saved = base.psutil
+        base.psutil = None
+        try:
+            self.assertEqual(CpuPeak().start().peak(), "")
+        finally:
+            base.psutil = saved
+
+    def test_header_without_cpu_only_is_renamed(self):
+        old_header = ("timestamp,model,load_s,ttft_approx_s,tokens,tokens_per_s,wall_s,"
+                      "host_cpu_pct,host_ram_pct,label,output_used,bullets_replaced,"
+                      "condense_retries,next_names_last_two")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "metrics.csv"
+            path.write_text(old_header + "\nrow\n", encoding="utf-8")
+            path.with_name("metrics_first_runs.csv").write_text("earlier\n", encoding="utf-8")
+            new = dict.fromkeys(old_header.split(","), "x")
+            new["cpu_only"] = "true"
+            log_metrics(str(path), new)
+            self.assertEqual(path.with_name("metrics_first_runs.csv").read_text(encoding="utf-8"),
+                             "earlier\n")
+            self.assertEqual(path.with_name("metrics_first_runs_2.csv").read_text(encoding="utf-8"),
+                             old_header + "\nrow\n")
+            self.assertEqual(path.read_text(encoding="utf-8").splitlines(),
+                             [old_header + ",cpu_only", ",".join(["x"] * 14 + ["true"])])
 
     def test_next_names_last_two_column(self):
         # (handler, ground windows, expected output_used, expected next_names_last_two)

@@ -1,11 +1,14 @@
 """Semi-transparent welcome-back window in the bottom-right corner.
 
 It runs as its own small process so it can never freeze the main program.
+The recap reaches it as one UTF-8 JSON object on standard input (--stdin),
+so no title or bullet text ever appears on the command line.
 Test it alone with:   python -m app.hud --sample
 """
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -13,7 +16,6 @@ from pathlib import Path
 from .win_api import enable_dpi_awareness
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-SEP = " ||| "          # separates bullets on the command line
 WIDTH = 440
 TASKBAR_MARGIN = 68    # keeps the window above the Windows taskbar
 MIN_HEIGHT = 150
@@ -31,13 +33,36 @@ def hud_geometry(wanted_height: int, screen_w: int, screen_h: int) -> tuple[int,
     return WIDTH, height, x, y
 
 
+def hud_command() -> list[str]:
+    """The HUD's command line. It never carries any recap text."""
+    return [sys.executable, "-m", "app.hud", "--stdin"]
+
+
+def encode_payload(title: str, bullets: list[str], seconds: int) -> bytes:
+    """{"title", "bullets", "seconds"} as one UTF-8 JSON object."""
+    data = {"title": title, "bullets": list(bullets), "seconds": int(seconds)}
+    return json.dumps(data, ensure_ascii=False).encode("utf-8")
+
+
+def decode_payload(raw: bytes) -> tuple[str, list[str], int]:
+    """The reverse of encode_payload; missing fields get safe defaults."""
+    data = json.loads(raw.decode("utf-8")) if raw.strip() else {}
+    title = str(data.get("title") or "Welcome back")
+    bullets = [str(b).strip() for b in data.get("bullets") or [] if str(b).strip()]
+    return title, bullets, int(data.get("seconds") or 15)
+
+
 def launch_hud(title: str, bullets: list[str], seconds: int = 15) -> None:
-    """Start the HUD in a separate, windowless process."""
-    cmd = [sys.executable, "-m", "app.hud",
-           "--title", title, "--bullets", SEP.join(bullets),
-           "--seconds", str(seconds)]
+    """Start the HUD in a separate, windowless process and hand it the recap
+    over standard input."""
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    subprocess.Popen(cmd, cwd=str(PROJECT_ROOT), creationflags=flags)
+    proc = subprocess.Popen(hud_command(), cwd=str(PROJECT_ROOT), creationflags=flags,
+                            stdin=subprocess.PIPE)
+    try:
+        proc.stdin.write(encode_payload(title, bullets, seconds))
+        proc.stdin.close()
+    except OSError:          # the HUD died before reading; the main program goes on
+        pass
 
 
 def show_hud(title: str, bullets: list[str], seconds: int = 15) -> None:
@@ -85,8 +110,8 @@ def show_hud(title: str, bullets: list[str], seconds: int = 15) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--title", default="Welcome back")
-    ap.add_argument("--bullets", default="")
+    ap.add_argument("--stdin", action="store_true",
+                    help='read {"title", "bullets", "seconds"} as UTF-8 JSON from standard input')
     ap.add_argument("--seconds", type=int, default=15)
     ap.add_argument("--sample", action="store_true", help="show sample text")
     ap.add_argument("--sample-long", action="store_true",
@@ -109,9 +134,10 @@ def main() -> None:
             "Contract_Draft_v2.docx (Word) was open just before that",
             "Resume with the unit-price column in the Excel sheet",
         ]
+    elif args.stdin:
+        title, bullets, args.seconds = decode_payload(sys.stdin.buffer.read())
     else:
-        title = args.title
-        bullets = [b.strip() for b in args.bullets.split("|||") if b.strip()]
+        ap.error("use --stdin (as launch_hud does), --sample or --sample-long")
     show_hud(title, bullets, args.seconds)
 
 

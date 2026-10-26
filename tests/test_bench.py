@@ -122,6 +122,31 @@ class BenchTests(unittest.TestCase):
         self.assertIn("| next_names_last_two (accepted bullet 3) | Runs |\n|---|---|\n"
                       "| true | 2 |\n| false | 0 |\n| n/a (replaced) | 0 |", summary)
 
+    def test_cpu_only_rows_and_summary_are_labelled(self):
+        cfg = _mock_cfg()
+        cfg.cpu_only = True
+        rows = _quiet_run(1, cfg, ["office"])
+        self.assertEqual((rows[0]["cpu_only"], rows[0]["label"]), ("true", "MEASURED (host, CPU only)"))
+        summary = build_summary(rows, cfg)
+        self.assertIn("**MEASURED (host, CPU only)**", summary)
+        self.assertIn("with Ollama option num_gpu = 0", summary)
+        self.assertIn("## Scenario: office (MEASURED (host, CPU only))", summary)
+        self.assertIn("| cpu_only | true |", summary)
+
+    def test_default_rows_are_not_cpu_only(self):
+        cfg = _mock_cfg()
+        rows = _quiet_run(1, cfg, ["office"])
+        self.assertEqual((rows[0]["cpu_only"], rows[0]["label"]), ("false", "MEASURED (host)"))
+        summary = build_summary(rows, cfg)
+        self.assertIn("| cpu_only | false |", summary)
+        self.assertNotIn("num_gpu", summary)
+
+    def test_fields_have_peak_cpu_and_cpu_only(self):
+        self.assertEqual(FIELDS.index("host_cpu_peak_pct"), FIELDS.index("host_cpu_pct") + 1)
+        self.assertEqual(FIELDS[-2:], ["cpu_only", "label"])
+        summary = build_summary(_quiet_run(1, _mock_cfg(), ["office"]), _mock_cfg())
+        self.assertIn("| host_cpu_peak_pct |", summary)
+
     def test_new_run_dir_never_reuses_a_folder(self):
         with tempfile.TemporaryDirectory() as tmp:
             dirs = {new_run_dir(Path(tmp)) for _ in range(3)}

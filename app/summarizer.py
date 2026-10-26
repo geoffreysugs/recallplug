@@ -411,7 +411,8 @@ def summarize(entries: list[Entry], cfg: Config,
     least one was replaced by a rule-based sentence, 'fallback' that the model
     was unreachable and 'rule_only' that cfg.use_model is False.
     metrics['bullets_replaced'] is 0-2, metrics['condense_retries'] 0-2 and
-    metrics['next_names_last_two'] 'true'/'false' ('' if bullet 3 was replaced).
+    metrics['next_names_last_two'] 'true'/'false' ('' if bullet 3 was replaced)
+    and metrics['cpu_only'] 'true'/'false' (cfg.cpu_only).
     'debug' holds the raw model answer and the reasons; it is only printed
     (--debug / --show-rejections) and never written to a file.
     """
@@ -447,6 +448,7 @@ def summarize(entries: list[Entry], cfg: Config,
     # only the boolean is saved: would the accepted bullet 3 pass the strict rule?
     # ("" when the model's bullet 3 was replaced)
     metrics["next_names_last_two"] = str(names_last_two(b3, entries)).lower() if b3 else ""
+    metrics["cpu_only"] = str(cfg.cpu_only).lower()
     if cfg.metrics_csv:
         try:
             log_metrics(cfg.metrics_csv, metrics)

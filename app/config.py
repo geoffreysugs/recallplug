@@ -19,6 +19,7 @@ class Config:
     num_predict: int = 80            # max tokens in the answer (bullets 2 and 3)
     request_timeout_s: int = 90
     use_model: bool = True           # False (`--no-model`) = rule-only bullets, no model call
+    cpu_only: bool = False           # True (`--cpu-only`) = ask Ollama for num_gpu = 0
 
     # ---- Bullet 3 ("Next: ...") is rejected if it contains one of these whole
     #      words (case-insensitive); an empty tuple turns the check off

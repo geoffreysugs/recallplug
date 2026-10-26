@@ -4,6 +4,7 @@
     python -m bench.run_bench --runs 10 --backend mock --scenario web_heavy
     python -m bench.run_bench --runs 10 --show-rejections   # why bullets were replaced (terminal only)
     python -m bench.run_bench --runs 10 --no-model          # rule-only baseline
+    python -m bench.run_bench --runs 10 --cpu-only          # Ollama with num_gpu = 0
 
 Every invocation is saved to bench/results/<timestamp>/ (results.csv, one row
 per run, and summary.md); bench/summary.md is a copy of the latest summary.
@@ -25,6 +26,7 @@ from app.summarizer import summarize
 from app.titles import Entry
 
 LABEL = "MEASURED (host)"
+CPU_ONLY_LABEL = "MEASURED (host, CPU only)"
 BENCH_DIR = Path(__file__).resolve().parent
 
 # Fake English scenarios, oldest first: (title, app)
@@ -49,10 +51,16 @@ SCENARIOS = {
 }
 
 FIELDS = ["scenario", "run", "backend", "model", "wall_s", "ttft_approx_s", "tokens",
-          "tokens_per_s", "host_cpu_pct", "host_ram_pct", "pipeline_s", "output_used",
-          "bullets_replaced", "condense_retries", "next_names_last_two", "label"]
-STAT_FIELDS = ["wall_s", "ttft_approx_s", "tokens_per_s", "host_cpu_pct", "host_ram_pct", "pipeline_s"]
+          "tokens_per_s", "host_cpu_pct", "host_cpu_peak_pct", "host_ram_pct", "pipeline_s",
+          "output_used", "bullets_replaced", "condense_retries", "next_names_last_two",
+          "cpu_only", "label"]
+STAT_FIELDS = ["wall_s", "ttft_approx_s", "tokens_per_s", "host_cpu_pct", "host_cpu_peak_pct",
+               "host_ram_pct", "pipeline_s"]
 OUTPUTS = ("model", "mixed", "fallback", "rule_only")
+
+
+def label_for(cfg: Config) -> str:
+    return CPU_ONLY_LABEL if cfg.cpu_only else LABEL
 
 
 def scenario_entries(name: str) -> list[Entry]:
@@ -93,14 +101,15 @@ def run_bench(runs: int, cfg: Config, scenarios: list[str] | None = None,
                 "backend": backend.name if backend else "none",
                 "model": m.get("model", cfg.model if backend else ""),
                 **{k: m.get(k, "") for k in ("wall_s", "ttft_approx_s", "tokens", "tokens_per_s",
-                                             "host_cpu_pct", "host_ram_pct")},
+                                             "host_cpu_pct", "host_cpu_peak_pct", "host_ram_pct")},
                 "pipeline_s": pipeline_s,
                 "output_used": source,
                 # unreachable model: both model bullets became rule-based; rule_only: n/a
                 "bullets_replaced": m.get("bullets_replaced", 2 if source == "fallback" else ""),
                 "condense_retries": m.get("condense_retries", 0),
                 "next_names_last_two": m.get("next_names_last_two", ""),
-                "label": LABEL,
+                "cpu_only": str(cfg.cpu_only).lower(),
+                "label": label_for(cfg),
             })
             print(f"{name} run {i}/{runs}: {source}, {pipeline_s}s")
             if show_rejections:
@@ -119,11 +128,11 @@ def _fmt(x: float) -> str:
     return f"{x:.3f}".rstrip("0").rstrip(".") if x != int(x) else str(int(x))
 
 
-def _scenario_section(name: str, rows: list[dict]) -> list[str]:
+def _scenario_section(name: str, rows: list[dict], label: str) -> list[str]:
     windows = SCENARIOS.get(name, [])
     apps = ", ".join(app for _title, app in windows[-2:])
     lines = [
-        f"## Scenario: {name} ({LABEL})",
+        f"## Scenario: {name} ({label})",
         "",
         f"{len(windows)} fake windows; the last two are in: {apps}. Runs: {len(rows)}.",
         "",
@@ -153,10 +162,13 @@ def _scenario_section(name: str, rows: list[dict]) -> list[str]:
 def build_summary(rows: list[dict], cfg: Config, run_dir: str = "") -> str:
     backend = rows[0]["backend"] if rows else cfg.backend
     model = (rows[0]["model"] if rows else cfg.model) or "none (rule-only)"
+    label = rows[0]["label"] if rows else label_for(cfg)
+    cpu_only = rows[0]["cpu_only"] if rows else str(cfg.cpu_only).lower()
+    how = " with Ollama option num_gpu = 0" if cpu_only == "true" else ""
     lines = [
         "# RecallPlug benchmark",
         "",
-        f"**{LABEL}**: measured on this computer through the `{backend}` backend, "
+        f"**{label}**: measured on this computer through the `{backend}` backend{how}, "
         "not on the ASUS UGen300 / Hailo-10H.",
         "",
         "| Item | Value |",
@@ -167,12 +179,13 @@ def build_summary(rows: list[dict], cfg: Config, run_dir: str = "") -> str:
         f"| OS | {platform.platform()} |",
         f"| Python | {platform.python_version()} |",
         f"| Bullet 3 ground windows | {cfg.next_ground_windows} |",
+        f"| cpu_only | {cpu_only} |",
     ]
     if run_dir:
         lines.append(f"| Raw results | `{run_dir}/results.csv` |")
     lines.append("")
     for name in dict.fromkeys(r["scenario"] for r in rows):
-        lines += _scenario_section(name, [r for r in rows if r["scenario"] == name])
+        lines += _scenario_section(name, [r for r in rows if r["scenario"] == name], label)
     lines += [
         "Notes: bullet 1 is rule-based by design; the model writes bullets 2 and 3. "
         "`output_used` = model when both passed the checks, mixed when at least one was "
@@ -182,6 +195,8 @@ def build_summary(rows: list[dict], cfg: Config, run_dir: str = "") -> str:
         "`next_names_last_two` says whether an accepted bullet 3 would also pass N = 2. "
         "`wall_s` is the first model call only; `pipeline_s` also includes condense "
         "retries, prompt building and checks. Run 1 can include model load time. "
+        "`host_cpu_pct` is the system-wide average CPU during the first model call and "
+        "`host_cpu_peak_pct` the highest 0.1 s sample during it (both need psutil). "
         "Window titles and raw model answers are never saved.",
         "",
     ]
@@ -215,6 +230,8 @@ def main() -> None:
     ap.add_argument("--backend", help="ollama | hailo | mock (default from config)")
     ap.add_argument("--scenario", choices=["all", *SCENARIOS], default="all")
     ap.add_argument("--no-model", action="store_true", help="rule-only bullets, no model call")
+    ap.add_argument("--cpu-only", action="store_true",
+                    help="send Ollama num_gpu = 0 so the model runs on the CPU only")
     ap.add_argument("--ground-windows", type=int, metavar="N",
                     help="bullet 3 must name one of the last N windows (default from config; 2 = strict)")
     ap.add_argument("--show-rejections", action="store_true",
@@ -228,6 +245,8 @@ def main() -> None:
         cfg.backend = args.backend
     if args.no_model:
         cfg.use_model = False
+    if args.cpu_only:
+        cfg.cpu_only = True
     if args.ground_windows is not None:
         cfg.next_ground_windows = max(1, args.ground_windows)
     scenarios = list(SCENARIOS) if args.scenario == "all" else [args.scenario]

@@ -9,6 +9,7 @@ background. The moment you come back, the recap pops up bottom-right.
     python -m app.main                # real timers (5 minutes away)
     python -m app.main --debug ...    # also print the raw model answer (terminal only)
     python -m app.main --no-model ... # rule-based bullets only, no model call
+    python -m app.main --cpu-only ... # ask Ollama to run the model on the CPU only
 """
 from __future__ import annotations
 
@@ -147,6 +148,8 @@ def main() -> None:
                     help="inference backend (default from config)")
     ap.add_argument("--no-model", action="store_true",
                     help="rule-only bullets, never call a model")
+    ap.add_argument("--cpu-only", action="store_true",
+                    help="send Ollama num_gpu = 0 so the model runs on the CPU only")
     ap.add_argument("--debug", action="store_true",
                     help="print the raw model answer and why bullets were replaced (terminal only)")
     args = ap.parse_args()
@@ -159,6 +162,9 @@ def main() -> None:
     if args.no_model:
         cfg.use_model = False
         say("NO-MODEL MODE: rule-based bullets only, no model is called.")
+    if args.cpu_only:
+        cfg.cpu_only = True
+        say("CPU-ONLY MODE: Ollama is asked for num_gpu = 0 (the first call may reload the model).")
     if args.demo:
         cfg.away_s = 10
         say("DEMO MODE: away timer shortened to 10 seconds (real value is 300).")
