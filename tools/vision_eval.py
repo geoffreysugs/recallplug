@@ -4,10 +4,14 @@
 
 Runs every image through a local Ollama vision model twice: GPU mode
 (default options), then CPU-only mode (options.num_gpu = 0). Before each
-mode the model is unloaded; each mode starts with one warm-up call on S1
-that is logged but kept out of the statistics. During every call the
-system-wide CPU percent is sampled every 0.1 s (average and peak), plus
-peak RAM percent and the peak total RSS of "ollama*" processes.
+mode the model is unloaded (before GPU mode also RecallPlug's text model,
+so the GPU is not shared) and the models still loaded are recorded. Each
+mode starts with one text-only warm-up call ("Say OK.", no image, so no
+image prompt cache exists) that is logged but kept out of the statistics.
+During every call the system-wide CPU percent is sampled every 0.1 s
+(average and peak), plus peak RAM percent and the peak total RSS of the
+Ollama processes ("ollama*" and "*llama-server*"). A call with garbled
+output, an error, or (CPU-only) any VRAM use is INVALID and excluded.
 
 The screenshots contain personal information: the images are never
 printed or saved, and results go to <out>/<timestamp>/, which must be
@@ -47,6 +51,11 @@ MODES = {                  # mode -> (display name, extra Ollama options)
 }
 PROMPT = ("Describe in two short sentences what this screen is about: the type of document, "
           "its topic and its structure. Do not copy any numbers, prices, names or email addresses.")
+WARMUP_PROMPT = "Say OK."
+WARMUP_IMAGE = "warm-up (text only)"
+TEXT_MODEL = "qwen2.5:1.5b"           # RecallPlug's recap model, unloaded before GPU mode
+GARBLED_MIN_DISTINCT = 3
+GARBLED_MAX_SHARE = 0.6
 
 # Pre-registered expectations: written before any run, do not change.
 EXPECTED = {
@@ -73,7 +82,7 @@ CSV_FIELDS = ["mode", "mode_name", "image", "warmup", "description", "type_hits"
               "likely_correct", "copied_digits", "total_duration_s", "load_duration_s",
               "prompt_eval_duration_s", "eval_count", "eval_duration_s", "wall_s",
               "cpu_avg_pct", "cpu_peak_pct", "ram_peak_pct", "ollama_rss_peak_mb",
-              "size_mb", "size_vram_mb", "size_vram_ok", "valid", "error", "label"]
+              "size_mb", "size_vram_mb", "size_vram_ok", "valid", "invalid_reason", "error", "label"]
 
 _EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 
@@ -107,11 +116,46 @@ def size_vram_ok(mode: str, size_vram) -> bool:
     return int(size_vram) == 0 if mode == "cpu" else int(size_vram) > 0
 
 
-def call_valid(mode: str, size_vram, error: str = "") -> bool:
-    """A measured call counts unless it failed; a CPU-only call also needs size_vram == 0."""
+def garbled(text: str) -> bool:
+    """True if the stripped text has fewer than 3 distinct characters or one
+    character makes up more than 60% of it (e.g. '@@@@@@')."""
+    s = text.strip()
+    if len(set(s)) < GARBLED_MIN_DISTINCT:
+        return True
+    return max(s.count(ch) for ch in set(s)) / len(s) > GARBLED_MAX_SHARE
+
+
+def invalid_reason(mode: str, size_vram, error: str = "", description: str | None = None) -> str:
+    """Why a measured call does not count ("" = it counts): it failed, the
+    output is garbled, or a CPU-only call used VRAM (size_vram must be 0).
+    Pass description=None to skip the garbled check."""
     if error:
-        return False
-    return size_vram_ok(mode, size_vram) if mode == "cpu" else True
+        return "error"
+    if description is not None and garbled(description):
+        return "garbled output"
+    if mode == "cpu" and not size_vram_ok(mode, size_vram):
+        return "size_vram not 0" if size_vram not in (None, "") else "size_vram unknown"
+    return ""
+
+
+def call_valid(mode: str, size_vram, error: str = "", description: str | None = None) -> bool:
+    return not invalid_reason(mode, size_vram, error, description)
+
+
+def is_ollama_process(name: str) -> bool:
+    """Ollama's own processes: 'ollama*' and its model runner '*llama-server*'."""
+    low = (name or "").lower()
+    return low.startswith("ollama") or "llama-server" in low
+
+
+def loaded_cell(models: list[dict] | None) -> str:
+    """/api/ps models -> 'name (size MB, VRAM MB), ...' or 'none'."""
+    if models is None:
+        return "unknown"
+    if not models:
+        return "none"
+    return ", ".join(f"{m.get('name', '?')} ({round(m.get('size', 0) / 2**20)} MB, "
+                     f"VRAM {round(m.get('size_vram', 0) / 2**20)} MB)" for m in models)
 
 
 def decision(rows: list[dict]) -> tuple[str, str]:
@@ -139,12 +183,18 @@ def mode_stats(rows: list[dict], mode: str) -> dict:
         vals = [float(r[key]) for r in valid if r[key] != ""]
         return round(statistics.median(vals), 3) if vals else None
 
+    reasons: dict[str, int] = {}
+    for r in measured:
+        if not r["valid"]:
+            why = r.get("invalid_reason") or "invalid"
+            reasons[why] = reasons.get(why, 0) + 1
     return {
         "mode_name": MODES[mode][0],
         "label": LABEL,
         "measured_calls": len(measured),
         "valid_calls": len(valid),
         "invalid_calls": len(measured) - len(valid),
+        "invalid_reasons": reasons,
         "likely_correct": sum(bool(r["likely_correct"]) for r in valid),
         "copied_digits": sum(bool(r["copied_digits"]) for r in valid),
         "median_wall_s": med("wall_s"),
@@ -170,6 +220,10 @@ def md_cell(text) -> str:
     return " ".join(fmt(text).split()).replace("|", "\\|")
 
 
+def valid_cell(r: dict) -> str:
+    return "yes" if r["valid"] else f"INVALID ({r.get('invalid_reason') or 'invalid'})"
+
+
 def vram_cell(r: dict) -> str:
     if r["size_vram_mb"] == "":
         return "unknown"
@@ -185,10 +239,13 @@ def expected_cell(image: str) -> str:
 
 
 TABLE_HEAD = ("| image | description | expected | likely_correct | copied_digits | total_duration_s "
-              "| wall_s | cpu_avg_pct | cpu_peak_pct | ram_peak_pct | ollama_rss_peak_mb | size_vram_ok |")
+              "| wall_s | cpu_avg_pct | cpu_peak_pct | ram_peak_pct | ollama_rss_peak_mb | size_vram_ok "
+              "| valid |")
 
 
-def format_report(rows: list[dict], info: dict, model: str, started: str) -> str:
+def format_report(rows: list[dict], info: dict, model: str, started: str,
+                  loaded_at_start: dict | None = None) -> str:
+    loaded_at_start = loaded_at_start or {}
     lines = [
         "# Vision model check on five screenshots",
         "",
@@ -208,32 +265,37 @@ def format_report(rows: list[dict], info: dict, model: str, started: str) -> str
         "",
         f"Prompt (same for every call): \"{PROMPT}\"",
         "Options: stream=false, temperature 0.1, num_predict 80. Before each mode the model was "
-        "unloaded (keep_alive 0) until /api/ps no longer listed it.",
+        f"unloaded (keep_alive 0) until /api/ps no longer listed it; before GPU mode {TEXT_MODEL} "
+        "was unloaded too, so the GPU was not shared. Each mode starts with a text-only warm-up "
+        f"(\"{WARMUP_PROMPT}\", no image), so no measured image is in the prompt cache.",
         "",
     ]
     for mode, (name, _opts) in MODES.items():
         mode_rows = [r for r in rows if r["mode"] == mode]
-        lines += [f"## {name} ({LABEL})", ""]
+        lines += [f"## {name} ({LABEL})", "",
+                  f"Models loaded at the start of this mode (GET /api/ps, before the warm-up): "
+                  f"{md_cell(loaded_cell(loaded_at_start.get(mode)))}", ""]
         for r in (r for r in mode_rows if r["warmup"]):
-            lines.append(f"Warm-up on {r['image']} (excluded from the statistics): "
+            lines.append(f"Warm-up, {r['image']} (excluded from the statistics): "
                          f"wall {fmt(r['wall_s'])} s, load {fmt(r['load_duration_s'])} s, "
                          f"CPU peak {fmt(r['cpu_peak_pct'])}%, size_vram_ok {vram_cell(r)}"
                          + (f", error: {md_cell(r['error'])}" if r["error"] else "") + ".")
-        lines += ["", TABLE_HEAD, "|" + "---|" * 12]
+        lines += ["", TABLE_HEAD, "|" + "---|" * 13]
         for r in (r for r in mode_rows if not r["warmup"]):
             desc = r["description"] if not r["error"] else f"ERROR: {r['error']}"
             lines.append("| " + " | ".join(md_cell(v) for v in (
                 r["image"], desc, expected_cell(r["image"]), r["likely_correct"], r["copied_digits"],
                 r["total_duration_s"], r["wall_s"], r["cpu_avg_pct"], r["cpu_peak_pct"],
-                r["ram_peak_pct"], r["ollama_rss_peak_mb"])) + f" | {md_cell(vram_cell(r))} |")
+                r["ram_peak_pct"], r["ollama_rss_peak_mb"], vram_cell(r), valid_cell(r))) + " |")
         s = mode_stats(rows, mode)
-        lines += ["", f"Valid calls: {s['valid_calls']} of {s['measured_calls']}; likely_correct "
+        reasons = ", ".join(f"{n} {why}" for why, n in s["invalid_reasons"].items())
+        lines += ["", f"Excluded as INVALID: {s['invalid_calls']} of {s['measured_calls']}"
+                  + (f" ({reasons})" if reasons else "") + ". INVALID calls are left out of the "
+                  "statistics and of the decision.",
+                  f"Valid calls: {s['valid_calls']} of {s['measured_calls']}; likely_correct "
                   f"{s['likely_correct']}, copied_digits {s['copied_digits']}; median wall "
                   f"{fmt(s['median_wall_s'])} s, median CPU average {fmt(s['median_cpu_avg_pct'])}%, "
                   f"highest CPU peak {fmt(s['max_cpu_peak_pct'])}% ({LABEL}).", ""]
-        if mode == "cpu" and s["invalid_calls"]:
-            lines += ["**INVALID CPU-only calls** (size_vram was not 0, or the call failed) are "
-                      "excluded from the statistics and from the decision.", ""]
     result, why = decision(rows)
     lines += [
         "## Pre-registered decision (CPU-only calls on S1, S2, S3)",
@@ -249,10 +311,12 @@ def format_report(rows: list[dict], info: dict, model: str, started: str) -> str
         "- likely_correct = at least one expected type keyword AND one topic keyword "
         "(case-insensitive). copied_digits = the description contains a digit or an "
         "email-like string. Both are hints only; the final judgement is made by a human.",
+        "- INVALID = the call failed, the output is garbled (fewer than 3 distinct characters, "
+        "or one character is more than 60% of it), or a CPU-only call had size_vram above 0.",
         "- The expectations were written before any run and were not changed.",
         "- CPU peak is the highest 0.1 s sample of system-wide CPU during the call; the "
         "average covers the whole call. The ollama RSS is the sum over processes whose name "
-        "starts with \"ollama\".",
+        "starts with \"ollama\" or contains \"llama-server\" (Ollama's model runner).",
         "- No image was printed or saved; this folder holds only text results.",
         "",
     ]
@@ -326,7 +390,7 @@ def _busy(before, after) -> float:
 def _ollama_rss() -> int:
     rss = 0
     for p in psutil.process_iter(["name", "memory_info"]):
-        if (p.info.get("name") or "").lower().startswith("ollama") and p.info.get("memory_info"):
+        if is_ollama_process(p.info.get("name")) and p.info.get("memory_info"):
             rss += p.info["memory_info"].rss
     return rss
 
@@ -369,10 +433,16 @@ class Sampler:
 
 
 # ------------------------------------------------------------ one call
-def one_call(model: str, mode: str, image: str, path: Path, warmup: bool) -> dict:
-    image_b64 = base64.b64encode(path.read_bytes()).decode("ascii")
-    body = {"model": model, "prompt": PROMPT, "images": [image_b64], "stream": False,
+def one_call(model: str, mode: str, image: str, path: Path | None) -> dict:
+    """One measured image call, or the text-only warm-up when path is None."""
+    warmup = path is None
+    body = {"model": model, "stream": False,
             "options": {"temperature": 0.1, "num_predict": 80, **MODES[mode][1]}}
+    if warmup:
+        body["prompt"] = WARMUP_PROMPT
+    else:
+        body["prompt"] = PROMPT
+        body["images"] = [base64.b64encode(path.read_bytes()).decode("ascii")]
     row = {k: "" for k in CSV_FIELDS}
     row.update({"mode": mode, "mode_name": MODES[mode][0], "image": image, "warmup": warmup,
                 "label": LABEL})
@@ -400,10 +470,12 @@ def one_call(model: str, mode: str, image: str, path: Path, warmup: bool) -> dic
         row["size_vram_mb"] = round(ps.get("size_vram", 0) / 2**20)
     vram = ps.get("size_vram") if ps is not None else None
     row["size_vram_ok"] = size_vram_ok(mode, vram)
-    row["valid"] = call_valid(mode, vram, row["error"])
-    ok, types, topics = check_expected(text, image)
-    row.update({"likely_correct": ok, "type_hits": ";".join(types), "topic_hits": ";".join(topics),
-                "copied_digits": copied_digits(text)})
+    row["invalid_reason"] = invalid_reason(mode, vram, row["error"], None if warmup else text)
+    row["valid"] = not row["invalid_reason"]
+    if not warmup:
+        ok, types, topics = check_expected(text, image)
+        row.update({"likely_correct": ok, "type_hits": ";".join(types),
+                    "topic_hits": ";".join(topics), "copied_digits": copied_digits(text)})
     return row
 
 
@@ -460,14 +532,20 @@ def run(images_dir: Path, out_base: Path, model: str) -> Path:
     started = time.strftime("%Y-%m-%d %H:%M:%S")
     info = system_info()
     rows: list[dict] = []
+    loaded_at_start: dict[str, list] = {}
     for mode, (name, _opts) in MODES.items():
         say(f"mode {name}: unloading {model}")
         unload(model)
-        for image, warmup in [("S1", True)] + [(i, False) for i in IMAGES]:
-            say(f"  {'warm-up ' if warmup else ''}{image} ...")
-            row = one_call(model, mode, image, images[image], warmup)
+        if mode == "gpu" and not same_model(TEXT_MODEL, model) and loaded(TEXT_MODEL) is not None:
+            say(f"mode {name}: unloading {TEXT_MODEL} so the GPU is not shared")
+            unload(TEXT_MODEL)
+        loaded_at_start[mode] = _get("/api/ps").get("models", [])
+        say(f"mode {name}: loaded at start: {loaded_cell(loaded_at_start[mode])}")
+        for image, path in [(WARMUP_IMAGE, None)] + [(i, images[i]) for i in IMAGES]:
+            say(f"  {image} ...")
+            row = one_call(model, mode, image, path)
             rows.append(row)
-            state = "ERROR" if row["error"] else ("valid" if row["valid"] else "INVALID")
+            state = "valid" if row["valid"] else f"INVALID ({row['invalid_reason']})"
             say(f"  {image}: {state}, wall {row['wall_s']} s, CPU peak {fmt(row['cpu_peak_pct'])}%, "
                 f"VRAM {fmt(row['size_vram_mb'])} MB")
     run_dir = new_run_dir(out_base)
@@ -475,10 +553,12 @@ def run(images_dir: Path, out_base: Path, model: str) -> Path:
         writer = csv.DictWriter(f, fieldnames=CSV_FIELDS)
         writer.writeheader()
         writer.writerows(rows)
-    (run_dir / "report.md").write_text(format_report(rows, info, model, started), encoding="utf-8")
+    (run_dir / "report.md").write_text(format_report(rows, info, model, started, loaded_at_start),
+                                       encoding="utf-8")
     result, why = decision(rows)
     summary = {"model": model, "stand_in_for": "Qwen2-VL-2B", "label": LABEL, "started": started,
                "system": info, "modes": {m: mode_stats(rows, m) for m in MODES},
+               "loaded_at_start": {m: loaded_cell(v) for m, v in loaded_at_start.items()},
                "decision_rule": DECISION_RULE, "decision": result, "decision_values": why}
     (run_dir / "summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False),
                                           encoding="utf-8")

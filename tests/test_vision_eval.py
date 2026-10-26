@@ -2,6 +2,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from tools import vision_eval as ve
 
@@ -9,7 +10,7 @@ from tools import vision_eval as ve
 def _row(mode="cpu", image="S1", warmup=False, wall=10.0, peak=40.0, vram=0, valid=None,
          description="A text document with a table of freight quotes.", error=""):
     row = {k: "" for k in ve.CSV_FIELDS}
-    ok, types, topics = ve.check_expected(description, image)
+    ok, types, topics = ("", [], []) if warmup else ve.check_expected(description, image)
     row.update({"mode": mode, "mode_name": ve.MODES[mode][0], "image": image, "warmup": warmup,
                 "description": description, "likely_correct": ok,
                 "type_hits": ";".join(types), "topic_hits": ";".join(topics),
@@ -18,7 +19,8 @@ def _row(mode="cpu", image="S1", warmup=False, wall=10.0, peak=40.0, vram=0, val
                 "ram_peak_pct": 60.0, "ollama_rss_peak_mb": 3000, "size_mb": 4000,
                 "size_vram_mb": vram, "size_vram_ok": ve.size_vram_ok(mode, vram),
                 "error": error, "label": ve.LABEL})
-    row["valid"] = ve.call_valid(mode, vram, error) if valid is None else valid
+    row["invalid_reason"] = ve.invalid_reason(mode, vram, error, None if warmup else description)
+    row["valid"] = not row["invalid_reason"] if valid is None else valid
     return row
 
 
@@ -82,6 +84,99 @@ class ValidityTests(unittest.TestCase):
         self.assertEqual(ve.vram_cell(_row("gpu", vram=0)), "WARN: 0 MB in VRAM")
 
 
+class OllamaProcessTests(unittest.TestCase):
+    def test_counts_ollama_and_llama_server(self):
+        for name in ["ollama.exe", "Ollama", "ollama app.exe", "OLLAMA_LLAMA_SERVER.EXE",
+                     "llama-server", "llama-server.exe", "LLAMA-SERVER.EXE", "ggml-llama-server"]:
+            self.assertTrue(ve.is_ollama_process(name), name)
+
+    def test_other_processes_are_not_counted(self):
+        for name in ["chrome.exe", "python.exe", "llama.exe", "llamaserver.exe", "my-ollama.exe", "", None]:
+            self.assertFalse(ve.is_ollama_process(name), name)
+
+
+class GarbledTests(unittest.TestCase):
+    def test_garbled(self):
+        for text in ["@" * 80, "  @@@@@@@@  ", "", "   ", "ab", "abababab", "aaaaaaab c",
+                     "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!? ok"]:
+            self.assertTrue(ve.garbled(text), repr(text))
+
+    def test_normal_text_is_not_garbled(self):
+        for text in ["The screen shows a document titled Meeting Notes with action items.",
+                     "OK.", "abc"]:
+            self.assertFalse(ve.garbled(text), repr(text))
+
+    def test_share_limit_is_more_than_60_percent(self):
+        self.assertFalse(ve.garbled("aaabc"))          # 60% exactly is still fine
+        self.assertTrue(ve.garbled("aaaabc"))          # 66.7%
+
+    def test_garbled_call_is_invalid_in_both_modes(self):
+        self.assertEqual(ve.invalid_reason("gpu", 2048, "", "@" * 80), "garbled output")
+        self.assertEqual(ve.invalid_reason("cpu", 0, "", "@" * 80), "garbled output")
+        self.assertEqual(ve.invalid_reason("cpu", 0, "", "A contract about payment terms."), "")
+        self.assertEqual(ve.invalid_reason("cpu", 900, "", "A contract."), "size_vram not 0")
+        self.assertEqual(ve.invalid_reason("cpu", None, "", "A contract."), "size_vram unknown")
+        self.assertEqual(ve.invalid_reason("gpu", 2048, "URLError", ""), "error")
+        self.assertEqual(ve.invalid_reason("gpu", 2048, "", None), "")   # warm-up: no garbled check
+
+    def test_garbled_calls_are_excluded_from_stats_and_decision(self):
+        rows = [_row("cpu", f"S{i}", wall=5, peak=10) for i in range(1, 6)]
+        rows[1] = _row("cpu", "S2", wall=5, peak=10, description="@" * 80)
+        s = ve.mode_stats(rows, "cpu")
+        self.assertEqual((s["valid_calls"], s["invalid_calls"]), (4, 1))
+        self.assertEqual(s["invalid_reasons"], {"garbled output": 1})
+        self.assertEqual(ve.decision(rows), ("UNDETERMINED", "no valid CPU-only call for S2"))
+        text = ve.format_report(rows, {}, "m", "t")
+        self.assertIn("Excluded as INVALID: 1 of 5 (1 garbled output).", text)
+        self.assertIn("INVALID (garbled output)", text)
+
+
+class WarmupTests(unittest.TestCase):
+    def test_warmup_is_text_only_and_not_a_measured_image(self):
+        self.assertEqual(ve.WARMUP_PROMPT, "Say OK.")
+        self.assertNotIn(ve.WARMUP_IMAGE, ve.IMAGES)
+        sent = []
+
+        def fake_post(path, body, timeout):
+            sent.append(body)
+            return {"response": "OK.", "total_duration": 10**9}
+
+        with mock.patch.object(ve, "_post", fake_post), \
+                mock.patch.object(ve, "loaded", return_value={"size": 2**30, "size_vram": 0}), \
+                mock.patch.object(ve, "Sampler") as sampler:
+            sampler.return_value.__enter__.return_value = mock.Mock(avg=1.0, peak=2.0, ram_peak=3.0,
+                                                                    rss_peak=2**20)
+            row = ve.one_call("qwen2.5vl:3b", "cpu", ve.WARMUP_IMAGE, None)
+        self.assertEqual(len(sent), 1)
+        self.assertNotIn("images", sent[0])
+        self.assertEqual(sent[0]["prompt"], "Say OK.")
+        self.assertEqual(sent[0]["options"]["num_gpu"], 0)
+        self.assertTrue(row["warmup"])
+        self.assertTrue(row["valid"])                    # "OK." is short but not garbled-checked
+        self.assertEqual(row["likely_correct"], "")
+
+    def test_measured_call_sends_the_image(self):
+        sent = []
+
+        def fake_post(path, body, timeout):
+            sent.append(body)
+            return {"response": "@" * 80}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            img = Path(tmp, "S1.png")
+            img.write_bytes(b"not really a png")
+            with mock.patch.object(ve, "_post", fake_post), \
+                    mock.patch.object(ve, "loaded", return_value={"size": 2**30, "size_vram": 2**30}), \
+                    mock.patch.object(ve, "Sampler") as sampler:
+                sampler.return_value.__enter__.return_value = mock.Mock(avg=1.0, peak=2.0,
+                                                                        ram_peak=3.0, rss_peak=0)
+                row = ve.one_call("qwen2.5vl:3b", "gpu", "S1", img)
+        self.assertEqual(sent[0]["prompt"], ve.PROMPT)
+        self.assertEqual(len(sent[0]["images"]), 1)
+        self.assertNotIn("num_gpu", sent[0]["options"])
+        self.assertEqual((row["valid"], row["invalid_reason"]), (False, "garbled output"))
+
+
 class DecisionTests(unittest.TestCase):
     def _cpu(self, values):
         return [_row("cpu", f"S{i}", wall=w, peak=p) for i, (w, p) in enumerate(values, 1)]
@@ -119,18 +214,23 @@ class FormattingTests(unittest.TestCase):
         rows = []
         for mode in ("gpu", "cpu"):
             vram = 2500 if mode == "gpu" else 0
-            rows.append(_row(mode, "S1", warmup=True, vram=vram))
+            rows.append(_row(mode, ve.WARMUP_IMAGE, warmup=True, vram=vram, description="OK."))
             rows += [_row(mode, f"S{i}", vram=vram) for i in range(1, 6)]
         return rows
 
     def test_report_contents(self):
         info = {"CPU": "Test CPU", "RAM": "16.0 GB", "Windows": "Windows-11", "Ollama": "0.0.1"}
-        text = ve.format_report(self._rows(), info, "qwen2.5vl:3b", "2026-10-26 12:00:00")
+        loaded = {"gpu": [], "cpu": [{"name": "qwen2.5:1.5b", "size": 2**30, "size_vram": 0}]}
+        text = ve.format_report(self._rows(), info, "qwen2.5vl:3b", "2026-10-26 12:00:00", loaded)
         for needle in ["Qwen2.5-VL 3B", "Qwen2-VL-2B", "one machine", "MEASURED (host)",
                        "## RTX 4060 Laptop (MEASURED (host))",
                        "## CPU only (num_gpu=0) (MEASURED (host))",
                        "| Test CPU |", "| 16.0 GB |", "| Windows-11 |", "| 0.0.1 |",
-                       ve.TABLE_HEAD, ve.DECISION_RULE, "Warm-up on S1 (excluded from the statistics)",
+                       ve.TABLE_HEAD, ve.DECISION_RULE,
+                       "Warm-up, warm-up (text only) (excluded from the statistics)",
+                       "Models loaded at the start of this mode (GET /api/ps, before the warm-up): none",
+                       "before the warm-up): qwen2.5:1.5b (1024 MB, VRAM 0 MB)",
+                       "Excluded as INVALID: 0 of 5.",
                        "type: contract, agreement, document, legal; topic: payment",
                        f"**Result: {ve.DECISION_PASS}**"]:
             self.assertIn(needle, text)
@@ -141,7 +241,9 @@ class FormattingTests(unittest.TestCase):
         rows[-1] = _row("cpu", "S5", vram=800)
         text = ve.format_report(rows, {}, "m", "t")
         self.assertIn("INVALID (800 MB in VRAM)", text)
-        self.assertIn("**INVALID CPU-only calls**", text)
+        self.assertIn("Excluded as INVALID: 1 of 5 (1 size_vram not 0).", text)
+        self.assertIn("Models loaded at the start of this mode (GET /api/ps, before the warm-up): unknown",
+                      text)
         self.assertEqual(ve.mode_stats(rows, "cpu")["invalid_calls"], 1)
 
     def test_mode_stats_exclude_warmup(self):
