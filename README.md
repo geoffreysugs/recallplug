@@ -129,4 +129,4 @@ Benchmark results are saved to `bench/results/<timestamp>/` (`results.csv`, `sum
 
 ## About
 
-Built by geoffrey (GitHub: geoffreysugs) for the ASUS UGen AI League.
+Built by 蘇靖飛 (GitHub: geoffreysugs) for the ASUS UGen AI League.
