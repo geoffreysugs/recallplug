@@ -40,11 +40,12 @@ Real output of the current prototype:
 
 ## Architecture
 
-<!-- Add your own architecture diagram as docs/architecture.png, then remove this comment markup:
-![Architecture: watcher, privacy gate, memory, recap engine, inference backend, HUD](docs/architecture.png)
--->
+![Target architecture: light work on the PC, all AI models on the UGen300](docs/architecture.png)
 
-All inference sits behind one interface. `OllamaBackend` is built; a mock backend is used in tests; the UGen300 (Hailo) backend is a stub that falls back to Ollama. Porting to the device should not change the rest of the program.
+*Target architecture.* Light work stays on the PC: watching window titles, privacy checks, memory, the recap engine and the recap window. All AI models are planned to run on the ASUS UGen300 behind one model interface. Content-layer images are never kept; only text goes to memory.
+
+**Today (Stage I)** everything runs on the laptop: the model interface talks to Ollama on the PC. The content layer, export and import, and the UGen300 backend are planned for Stage II.
+
 
 ## Hardware and models
 
