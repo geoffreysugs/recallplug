@@ -124,8 +124,8 @@ Benchmark results are saved to `bench/results/<timestamp>/` (`results.csv`, `sum
 
 1. Mark, Gonzalez, Harris. “No Task Left Behind? Examining the Nature of Fragmented Work.” CHI 2005.
 2. Microsoft. Copilot+ PCs and Recall requirements. https://microsoft.com/en-ie/windows/copilot-plus-pcs
-3. ASUS. UGen300 USB AI Accelerator datasheet (UGen300-USB-8G); benchmark figures from Hailo, retrieved 02/11/26.
+3. [Datasheet] UGen300-USB-8G 1
 
 ## About
 
-Built by geoffrey (GitHub: geoffreysugs) for the ASUS UGen AI League. License: not chosen yet.
+Built by geoffrey (GitHub: geoffreysugs) for the ASUS UGen AI League.
