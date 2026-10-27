@@ -1,8 +1,8 @@
-# RecallPlug
+# Recall Plug
 
 **Your “where was I?”, prepared while you are away.**
 
-RecallPlug is a small Windows tool that answers one question the moment you sit back down: *what was I working on?* While you are away from your desk, a local language model prepares a three-line recap. When you return, it appears in a translucent window at the bottom right of the screen.
+Recall Plug is a small Windows tool that answers one question the moment you sit back down: *what was I working on?* While you are away from your desk, a local language model prepares a three-line recap. When you return, it appears in a translucent window at the bottom right of the screen.
 
 ![The recap window, shown after the user returns](docs/hud.png)
 
@@ -12,7 +12,7 @@ Entry for the **ASUS UGen AI League**: Battlefield Lightning · Workplace AI · 
 
 Interruptions are normal in office work, and getting back to the task takes time. In a field study of 24 information workers, interrupted work that was resumed on the same day took about 25 minutes to come back to, after more than two other activities [1].
 
-Memory tools for the desktop exist, but they make a different trade-off. Windows Recall needs a Copilot+ PC (an NPU of 40+ TOPS) and takes images of your active screen every few seconds [2]. Screenpipe records the screen and audio continuously and stores them locally [3]. RecallPlug starts from the other end: it looks at the window you are in, keeps only a short text note, and runs a **local model** on an ordinary Windows PC with a USB accelerator.
+Memory tools for the desktop exist, but they make a different trade-off. Windows Recall needs a Copilot+ PC (an NPU of 40+ TOPS) and takes images of your active screen every few seconds [2]. Screenpipe records the screen and audio continuously and stores them locally [3]. Recall Plug starts from the other end: it looks at the window you are in, keeps only a short text note, and runs a **local model** on an ordinary Windows PC with a USB accelerator.
 
 ## Advantages
 
