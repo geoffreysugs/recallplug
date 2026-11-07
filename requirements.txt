@@ -1,2 +1,3 @@
-# Optional: lets the prototype also record CPU/RAM while the model runs
+# RecallPlug needs only the Python 3.12 standard library; nothing here is required.
+# Optional: psutil lets the prototype and the benchmark record CPU/RAM while the model runs.
 psutil

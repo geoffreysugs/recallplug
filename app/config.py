@@ -6,6 +6,10 @@ Edit the values here. Some can be overridden from the command line
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
+
+# logs/ is git-ignored; ordinary runs never write into the tracked bench/ folder
+DEFAULT_METRICS_CSV = str(Path(__file__).resolve().parent.parent / "logs" / "metrics.csv")
 
 
 @dataclass
@@ -73,5 +77,6 @@ class Config:
         "snipping tool overlay",
     )
 
-    # ---- Where timing numbers are saved (contains NO window titles; "" = off)
-    metrics_csv: str = "bench/metrics.csv"
+    # ---- Where timing numbers are saved (contains NO window titles; "" = off).
+    #      The benchmark (bench/run_bench.py) sets "" and writes bench/results/ itself.
+    metrics_csv: str = DEFAULT_METRICS_CSV

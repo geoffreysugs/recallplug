@@ -50,8 +50,10 @@ def clean_title(raw: str) -> tuple[str, str]:
     return title, app
 
 
-def is_blocked(raw: str, cfg: Config) -> bool:
-    """True if this window must NOT be logged (empty, ours, or private)."""
+def is_blocked(raw: str, cfg: Config, keywords=None) -> bool:
+    """True if this window must NOT be logged (empty, ours, or private).
+    `keywords` is the privacy block list (lower-case substrings); None means
+    the built-in cfg.blacklist_keywords."""
     low = raw.strip().lower()
     if len(low) < 3:
         return True
@@ -60,7 +62,9 @@ def is_blocked(raw: str, cfg: Config) -> bool:
         return True
     if any(item in low for item in cfg.ignore_titles):
         return True
-    if any(word in low for word in cfg.blacklist_keywords):
+    if keywords is None:
+        keywords = cfg.blacklist_keywords
+    if any(word in low for word in keywords):
         return True
     return False
 

@@ -10,18 +10,21 @@ background. The moment you come back, the recap pops up bottom-right.
     python -m app.main --debug ...    # also print the raw model answer (terminal only)
     python -m app.main --no-model ... # rule-based bullets only, no model call
     python -m app.main --cpu-only ... # ask Ollama to run the model on the CPU only
+
+The watch loop itself lives in app/engine.py (RecallEngine); this module is
+the command-line wrapper around it.
 """
 from __future__ import annotations
 
 import argparse
-import threading
+import sys
 import time
 
+from . import blocklist, hotkey, selfcheck
 from .config import Config
+from .engine import RecallEngine, build_hud_title, format_away  # noqa: F401  (re-exported)
 from .hud import launch_hud
-from .summarizer import summarize
-from .titles import ActivityLog, clean_title, is_blocked
-from .win_api import enable_dpi_awareness, get_foreground_title, get_idle_seconds
+from .win_api import enable_dpi_awareness
 
 
 def stamp() -> str:
@@ -30,27 +33,6 @@ def stamp() -> str:
 
 def say(msg: str) -> None:
     print(f"[{stamp()}] {msg}", flush=True)
-
-
-def format_away(seconds: float) -> str:
-    seconds = int(seconds)
-    return f"{seconds} s" if seconds < 90 else f"{round(seconds / 60)} min"
-
-
-def observe(log: ActivityLog, cfg: Config) -> None:
-    """Look at the current window once and log it if allowed."""
-    raw = get_foreground_title()
-    if is_blocked(raw, cfg):
-        return
-    title, app = clean_title(raw)
-    if log.add(title, app):
-        stored = log.recent(1)[0].title            # redacted version
-        say(f"logged: {stored}" + (f"  ({app})" if app else ""))
-
-
-def build_hud_title(away_seconds: float, cfg: Config) -> str:
-    text = f"Welcome back - away {format_away(away_seconds)}"
-    return text[: cfg.max_title_chars]
 
 
 def print_debug(result: dict) -> None:
@@ -73,24 +55,20 @@ def print_debug(result: dict) -> None:
         print("   [debug] nothing dropped, condensed or replaced")
 
 
-def precompute(entries, cfg: Config, box: dict, debug: bool = False) -> None:
-    started = time.perf_counter()
-    box["result"] = summarize(entries, cfg)
-    r = box["result"]
-    extra = f", ~{r['metrics']['tokens_per_s']} tokens/s" if r["metrics"] else ""
-    say(f"recap ready in {time.perf_counter() - started:.1f}s (source: {r['source']}{extra})")
-    if debug:
-        print_debug(r)
+def make_engine(cfg: Config, debug: bool = False, blocklist_loader=None, **kwargs) -> RecallEngine:
+    return RecallEngine(cfg, log=say, debug_printer=print_debug if debug else None,
+                        blocklist_loader=blocklist_loader, **kwargs)
 
 
-def run_preview(cfg: Config, seconds: int, debug: bool = False) -> None:
-    log = ActivityLog(cfg.max_log_entries)
+def run_preview(cfg: Config, seconds: int, debug: bool = False, blocklist_loader=None) -> None:
+    engine = make_engine(cfg, debug=False, blocklist_loader=blocklist_loader)
     say(f"PREVIEW: switch between a few windows for {seconds} seconds...")
     end = time.time() + seconds
     while time.time() < end:
-        observe(log, cfg)
+        engine.observe()
         time.sleep(cfg.poll_s)
-    result = summarize(log.recent(cfg.prompt_entries), cfg)
+    result = engine.recap_now() or {"bullets": ["Recap could not be prepared."],
+                                    "source": "none", "debug": {}}
     say(f"recap source: {result['source']}")
     if debug:
         print_debug(result)
@@ -100,44 +78,39 @@ def run_preview(cfg: Config, seconds: int, debug: bool = False) -> None:
     time.sleep(1)
 
 
-def run_live(cfg: Config, debug: bool = False) -> None:
-    log = ActivityLog(cfg.max_log_entries)
-    state = "ACTIVE"
-    away_since = 0.0
-    box: dict = {"result": None}
-    worker: threading.Thread | None = None
+def start_pause_hotkey(engine: RecallEngine, hotkey_factory=hotkey.GlobalHotkey,
+                       beep=hotkey.beep):
+    """Ctrl+Alt+P toggles pause (the engine prints the console line, we beep).
+    Returns the started hotkey, or None with one warning if it is unavailable."""
+    def on_hotkey():
+        beep(engine.toggle_pause())
+
+    hk = hotkey_factory(on_hotkey)
+    if hk.start():
+        say(f"Pause hotkey: {hotkey.PAUSE_LABEL} pauses and resumes logging.")
+        return hk
+    code = getattr(hk, "win32_error", 0)
+    say(f"warning: the pause hotkey {hotkey.PAUSE_LABEL} could not be registered "
+        + (f"(Win32 error {code}; " if code else "(")
+        + "another program may use it); continuing without it.")
+    return None
+
+
+def run_live(cfg: Config, debug: bool = False, blocklist_loader=None) -> None:
+    engine = make_engine(cfg, debug=debug, blocklist_loader=blocklist_loader)
     say(f"RecallPlug running. Backend: {cfg.backend}, model: {cfg.model}. Away after {cfg.away_s}s idle. Ctrl+C to stop.")
-
-    while True:
-        idle = get_idle_seconds()
-
-        if state == "ACTIVE":
-            observe(log, cfg)
-            if idle >= cfg.away_s:
-                state = "AWAY"
-                away_since = time.time() - idle
-                box["result"] = None
-                worker = threading.Thread(
-                    target=precompute,
-                    args=(log.recent(cfg.prompt_entries), cfg, box, debug),
-                    daemon=True,
-                )
-                worker.start()
-                say("state: ACTIVE -> AWAY (preparing recap in the background)")
-
-        elif state == "AWAY" and idle < cfg.welcome_back_idle_s:
-            if worker:
-                worker.join(timeout=15)
-            result = box["result"] or {"bullets": ["Recap was not ready yet."], "source": "none"}
-            away_for = time.time() - away_since
-            say(f"state: AWAY -> ACTIVE (away {format_away(away_for)}); showing HUD")
-            launch_hud(build_hud_title(away_for, cfg), result["bullets"], cfg.hud_seconds)
-            state = "ACTIVE"
-
-        time.sleep(cfg.poll_s)
+    hk = start_pause_hotkey(engine)
+    engine.start()
+    try:
+        while engine.is_running:
+            time.sleep(0.5)
+    finally:
+        engine.stop()
+        if hk:
+            hk.stop()
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description="RecallPlug Stage I prototype")
     ap.add_argument("--demo", action="store_true", help="shorten 'away' to 10 seconds")
     ap.add_argument("--away", type=int, help="custom 'away' seconds")
@@ -152,8 +125,27 @@ def main() -> None:
                     help="send Ollama num_gpu = 0 so the model runs on the CPU only")
     ap.add_argument("--debug", action="store_true",
                     help="print the raw model answer and why bullets were replaced (terminal only)")
-    args = ap.parse_args()
+    ap.add_argument("--yes", action="store_true",
+                    help="answer yes when asked to download a missing model")
+    ap.add_argument("--blocklist", metavar="PATH",
+                    help=f"block list file (default: ${blocklist.ENV_VAR} or config/blocklist.txt)")
+    return ap
 
+
+def load_blocklist(cli_path=None, environ=None):
+    """Loads the block list once, prints the result and returns an engine loader."""
+    path = blocklist.resolve_path(cli_path, environ)
+    result = blocklist.load(path)
+    if result.warning:
+        say("warning: " + result.warning)
+    elif result.source == "created":
+        say(f"block list created with the built-in keywords: {path}")
+    say(f"block list: {len(result.keywords)} entries loaded"
+        + (" (built-in)" if result.source == "defaults" else f" from {path}"))
+    return blocklist.make_loader(path, warn=say, first=result)
+
+
+def build_config(args) -> Config:
     cfg = Config()
     if args.model:
         cfg.model = args.model
@@ -170,13 +162,25 @@ def main() -> None:
         say("DEMO MODE: away timer shortened to 10 seconds (real value is 300).")
     if args.away:
         cfg.away_s = args.away
+    return cfg
+
+
+def main(argv=None) -> None:
+    args = build_parser().parse_args(argv)
+    cfg = build_config(args)
+
+    loader = load_blocklist(args.blocklist)
 
     enable_dpi_awareness()
     try:
+        if selfcheck.needs_check(cfg):
+            code = selfcheck.run_cli_check(cfg, assume_yes=args.yes)
+            if code:
+                sys.exit(code)
         if args.preview is not None:
-            run_preview(cfg, args.preview, args.debug)
+            run_preview(cfg, args.preview, args.debug, blocklist_loader=loader)
         else:
-            run_live(cfg, args.debug)
+            run_live(cfg, args.debug, blocklist_loader=loader)
     except KeyboardInterrupt:
         say("stopped.")
 

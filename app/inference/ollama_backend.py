@@ -73,9 +73,12 @@ class OllamaBackend(InferenceBackend):
         except Exception:
             return False
 
-    def generate_text(self, prompt: str) -> tuple[str, dict]:
+    def generate_text(self, prompt: str, temperature: float = 0.1,
+                      num_predict: int | None = None) -> tuple[str, dict]:
+        """temperature / num_predict default to the recap settings (0.1, cfg.num_predict)."""
         cfg = self.cfg
-        options = {"temperature": 0.1, "num_predict": cfg.num_predict}
+        options = {"temperature": temperature,
+                   "num_predict": cfg.num_predict if num_predict is None else num_predict}
         if cfg.cpu_only:
             options["num_gpu"] = 0           # no layers on the GPU
         body = json.dumps({
