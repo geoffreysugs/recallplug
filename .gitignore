@@ -230,3 +230,4 @@ data/
 logs/
 exports/
 bench/metrics.csv
+config/settings.json
