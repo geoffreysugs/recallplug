@@ -1,5 +1,6 @@
 @echo off
-rem RecallPlug launcher. Any options are passed on, e.g.:  run.bat --preview 15
+rem Recall Plug window. Any options are passed on, e.g.:  run.bat --backend mock
+rem (run_cli.bat starts the command-line version instead)
 setlocal
 cd /d "%~dp0"
 
@@ -10,7 +11,7 @@ if errorlevel 1 goto no_python
 where ollama >nul 2>nul
 if errorlevel 1 goto no_ollama
 
-python -m app.main %*
+python -m app.gui %*
 set "RC=%ERRORLEVEL%"
 if not "%RC%"=="0" goto failed
 exit /b 0
