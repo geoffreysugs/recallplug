@@ -572,12 +572,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out", required=True, help="results go to <out>/<timestamp>/ (outside the repo)")
     ap.add_argument("--model", default="qwen2.5vl:3b")
     args = ap.parse_args(argv)
-    if psutil is None:
-        print("psutil is needed for CPU sampling. Install it with:  python -m pip install psutil")
-        return 2
     out = Path(args.out)
     if is_inside(out, PROJECT_ROOT):
         print(f"refusing to write inside the repository ({PROJECT_ROOT}); choose a folder outside it")
+        return 2
+    if psutil is None:
+        print("psutil is needed for CPU sampling. Install it with:  python -m pip install psutil")
         return 2
     run_dir = run(Path(args.images), out, args.model)
     say(f"wrote {run_dir}")

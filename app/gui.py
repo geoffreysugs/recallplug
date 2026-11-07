@@ -183,7 +183,8 @@ class RecallPlugApp:
     def _start_engine(self) -> None:
         if self.engine is not None:
             return
-        self.engine = self._engine_factory(lambda ev: self.presenter.post("event", ev))
+        presenter = self.presenter                  # engine threads never hold `self`
+        self.engine = self._engine_factory(lambda ev: presenter.post("event", ev))
         self.engine.start()
         self.presenter.engine_running()
         self.presenter.set_snapshot(self.engine.snapshot())
@@ -192,11 +193,12 @@ class RecallPlugApp:
     def _start_hotkeys(self) -> None:
         if self._hotkey_factory is None:
             return
+        presenter = self.presenter                  # hotkey threads never hold `self`
         failed = []
         for label, action, vk, hotkey_id, button in (
                 ("Ctrl+Alt+P", "toggle_pause", hotkey.VK_P, 1, "Pause"),
                 ("Ctrl+Alt+E", "export", ord("E"), 2, "Export")):
-            hk = self._hotkey_factory(lambda a=action: self.presenter.post("hotkey", a),
+            hk = self._hotkey_factory(lambda a=action: presenter.post("hotkey", a),
                                       vk=vk, hotkey_id=hotkey_id)
             if hk.start():
                 self.hotkeys.append(hk)
@@ -258,15 +260,17 @@ class RecallPlugApp:
     # ------------------------------------------------------------ workers
     def _run_check(self) -> None:
         self.presenter.start_check()
+        # workers get plain values only, never `self` (a window freed on a worker thread breaks Tk)
+        presenter, check_fn, cfg = self.presenter, self._check_fn, self.cfg
 
         def work():
             try:
-                result = self._check_fn(self.cfg)
+                result = check_fn(cfg)
             except Exception as exc:          # check() never raises, but be safe
                 result = selfcheck.SelfCheckResult(selfcheck.NOT_RUNNING, selfcheck.UNKNOWN,
-                                                   self.cfg.model,
+                                                   cfg.model,
                                                    f"Self-check failed ({type(exc).__name__}).")
-            self.presenter.post("selfcheck", result)
+            presenter.post("selfcheck", result)
 
         threading.Thread(target=work, name="RecallPlug-selfcheck", daemon=True).start()
 
@@ -277,14 +281,15 @@ class RecallPlugApp:
             return
         snapshot = self.engine.snapshot()
         ask_id = self.presenter.start_ask()
+        presenter, ask_fn, backend, cfg = self.presenter, self._ask_fn, self._backend, self.cfg
 
         def work():
             try:
-                result = self._ask_fn(question, snapshot, self._backend, self.cfg)
+                result = ask_fn(question, snapshot, backend, cfg)
             except Exception as exc:              # ask() never raises, but be safe
                 result = AskResult(f"The question could not be answered ({type(exc).__name__}).",
                                    "unknown")
-            self.presenter.post("ask_done", ask_id, result)
+            presenter.post("ask_done", ask_id, result)
 
         threading.Thread(target=work, name="RecallPlug-ask", daemon=True).start()
         self._timers["ask"] = self.root.after(
@@ -359,10 +364,11 @@ class RecallPlugApp:
         if self.presenter.downloading:
             return
         self.presenter.start_download()
+        presenter, pull_fn, cfg = self.presenter, self._pull_fn, self.cfg
 
         def work():
-            result = self._pull_fn(self.cfg, lambda p, s: self.presenter.post("pull_progress", p, s))
-            self.presenter.post("pull_done", result)
+            result = pull_fn(cfg, lambda p, s: presenter.post("pull_progress", p, s))
+            presenter.post("pull_done", result)
 
         threading.Thread(target=work, name="RecallPlug-pull", daemon=True).start()
         self.render()
