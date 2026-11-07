@@ -1,0 +1,23 @@
+# RecallPlug block list
+#
+# A window whose title contains any word or phrase below is never logged.
+# - one keyword per line (a phrase with spaces is fine, e.g. "sign in")
+# - matching ignores upper/lower case and finds the keyword anywhere in the title
+# - lines starting with # are comments; blank lines are ignored
+# Save the file, then restart RecallPlug (a GUI can reload it without a restart).
+# Delete this file to get the built-in list back.
+
+bank
+password
+incognito
+inprivate
+1password
+bitwarden
+keepass
+lastpass
+login
+sign in
+credit card
+網銀
+密碼
+無痕
