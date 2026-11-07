@@ -25,6 +25,9 @@ GREY = "#6e7781"
 
 MAX_RECENT = 25
 NO_RECAP = "No recap yet"
+ASK_WARNING = "AI answer, may be wrong"
+ASK_TIMEOUT_S = 60
+ASK_TIMEOUT_TEXT = "The model took too long (over 60 s). Please try again."
 
 ENGINE_LABELS = {
     State.RUNNING: ("Recording", GREEN),
@@ -121,6 +124,7 @@ class Presenter:
         self.ask_busy = False
         self.ask_answer = ""
         self.ask_source: Optional[str] = None
+        self._ask_id = 0
 
     # ------------------------------------------------------------ any thread
     def post(self, kind: str, *payload) -> None:
@@ -176,7 +180,9 @@ class Presenter:
         if kind == "hotkey":
             return msg[1]                        # "toggle_pause" / "export"
         if kind == "ask_done":
-            result = msg[1]
+            ask_id, result = msg[1], msg[2]
+            if ask_id != self._ask_id or not self.ask_busy:
+                return None                      # timed out or superseded: ignore
             self.ask_busy = False
             self.ask_answer, self.ask_source = result.text, result.source
             return None
@@ -202,10 +208,23 @@ class Presenter:
         self.download_percent = 0.0
         self.say(f"Asking Ollama to download {self.cfg.model}...", BLUE)
 
-    def start_ask(self) -> None:
+    def start_ask(self) -> int:
+        """Returns the id the worker must send back with ("ask_done", id, result)."""
+        self._ask_id += 1
         self.ask_busy = True
         self.ask_answer = "Thinking..."
         self.ask_source = None
+        return self._ask_id
+
+    def ask_timeout(self, ask_id: int) -> bool:
+        """Called by a timer; True if that request was still waiting."""
+        if not self.ask_busy or ask_id != self._ask_id:
+            return False
+        self._ask_id += 1                        # a late answer is ignored
+        self.ask_busy = False
+        self.ask_answer = ASK_TIMEOUT_TEXT
+        self.ask_source = "unknown"
+        return True
 
     def engine_running(self) -> None:
         self.engine_started = True

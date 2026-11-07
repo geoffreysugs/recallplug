@@ -18,10 +18,12 @@ import time
 import webbrowser
 from typing import Callable, Optional
 
-from . import blocklist, hotkey, selfcheck
+from . import ask, blocklist, hotkey, selfcheck
+from .ask import AskResult
 from .config import Config
 from .engine import RecallEngine
-from .gui_model import GREY, RED, ButtonState, Presenter
+from .gui_model import (ASK_TIMEOUT_S, ASK_WARNING, GREY, ORANGE, RED, ButtonState,
+                        Presenter)
 
 OLLAMA_DOWNLOAD_URL = "https://ollama.com/download"
 WINDOW_TITLE = "Recall Plug"
@@ -44,6 +46,8 @@ class RecallPlugApp:
                  open_url: Callable[[str], object] = webbrowser.open,
                  open_file: Optional[Callable[[str], object]] = None,
                  backend=None,
+                 ask_fn: Callable = ask.ask,
+                 ask_timeout_ms: int = ASK_TIMEOUT_S * 1000,
                  poll_ms: int = 500, drain_ms: int = 100,
                  clock: Callable[[], float] = time.time) -> None:
         self.root = root
@@ -59,6 +63,8 @@ class RecallPlugApp:
         self._open_url = open_url
         self._open_file = open_file or getattr(os, "startfile", None)
         self._backend = backend
+        self._ask_fn = ask_fn
+        self._ask_timeout_ms = ask_timeout_ms
         self._poll_ms, self._drain_ms = poll_ms, drain_ms
         self.engine: Optional[RecallEngine] = None
         self.hotkeys: list = []
@@ -115,6 +121,7 @@ class RecallPlugApp:
 
         middle = ttk.PanedWindow(root, orient="horizontal")
         middle.pack(fill="both", expand=True, padx=10, pady=6)
+        self._middle = middle
         left = ttk.LabelFrame(middle, text="Recent windows", padding=6)
         right = ttk.LabelFrame(middle, text="Latest recap", padding=6)
         middle.add(left, weight=3)
@@ -132,14 +139,22 @@ class RecallPlugApp:
         self._build_ask(root)
 
     def _build_ask(self, root) -> None:
-        """Phase 1: placeholder; the ask feature is wired in later."""
-        ttk = self.ttk
-        ask = ttk.LabelFrame(root, text="Ask about your recent windows", padding=6)
-        ask.pack(fill="x", padx=10, pady=(0, 10))
-        self.ask_entry = ttk.Entry(ask, state="disabled")
+        tk, ttk = self.tk, self.ttk
+        box = ttk.LabelFrame(root, text="Ask about your recent windows", padding=6)
+        box.pack(fill="x", padx=10, pady=(0, 10))
+        row = ttk.Frame(box)
+        row.pack(fill="x")
+        self.question_var = tk.StringVar()
+        self.ask_entry = ttk.Entry(row, textvariable=self.question_var)
         self.ask_entry.pack(side="left", fill="x", expand=True)
-        self.ask_button = ttk.Button(ask, text="Ask", state="disabled")
+        self.ask_entry.bind("<Return>", lambda _e: self.on_ask())
+        self.ask_button = ttk.Button(row, text="Ask", command=self.on_ask)
         self.ask_button.pack(side="left", padx=(6, 0))
+        tk.Label(box, text=ASK_WARNING, fg=ORANGE, anchor="w").pack(fill="x", pady=(6, 2))
+        self.answer_text = tk.Text(box, height=4, wrap="word", font=FONT, relief="flat",
+                                   state="disabled", background=root.cget("background"))
+        self.answer_text.pack(fill="x")
+        self._shown_answer = None
 
     # ------------------------------------------------------------ start / stop
     def _default_engine(self, on_event):
@@ -240,6 +255,26 @@ class RecallPlugApp:
         threading.Thread(target=work, name="RecallPlug-selfcheck", daemon=True).start()
 
     # ------------------------------------------------------------ buttons
+    def on_ask(self) -> None:
+        question = self.question_var.get()
+        if self.engine is None or not self.presenter.ask_enabled(question):
+            return
+        snapshot = self.engine.snapshot()
+        ask_id = self.presenter.start_ask()
+
+        def work():
+            try:
+                result = self._ask_fn(question, snapshot, self._backend, self.cfg)
+            except Exception as exc:              # ask() never raises, but be safe
+                result = AskResult(f"The question could not be answered ({type(exc).__name__}).",
+                                   "unknown")
+            self.presenter.post("ask_done", ask_id, result)
+
+        threading.Thread(target=work, name="RecallPlug-ask", daemon=True).start()
+        self.root.after(self._ask_timeout_ms, lambda: (self.presenter.ask_timeout(ask_id),
+                                                       self.render()))
+        self.render()
+
     def on_pause(self) -> None:
         if self.engine is not None:
             self.engine.toggle_pause()
@@ -301,6 +336,15 @@ class RecallPlugApp:
             for line in lines:
                 self.recent_list.insert("end", line)
             self._shown_recent = lines
+        self.ask_entry.configure(state="normal" if p.engine_started else "disabled")
+        self.ask_button.configure(
+            state="normal" if p.ask_enabled(self.question_var.get()) else "disabled")
+        if p.ask_answer != self._shown_answer:
+            self.answer_text.configure(state="normal")
+            self.answer_text.delete("1.0", "end")
+            self.answer_text.insert("1.0", p.ask_answer)
+            self.answer_text.configure(state="disabled")
+            self._shown_answer = p.ask_answer
         self.recap_label.configure(text="\n\n".join("• " + l if l != "No recap yet" else l
                                                     for l in p.recap()))
 

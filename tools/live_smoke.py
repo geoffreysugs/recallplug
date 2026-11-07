@@ -12,6 +12,10 @@ Steps (each PASS / FAIL / SKIP, printed as a table at the end):
      idle providers; the key is pressed with SendInput
   4. a RecallEngine with fake titles and a fake idle provider, using the real Ollama:
      a recap_ready event with 1-3 lines must arrive within 60 s
+  5. three questions to app.ask with the real Ollama and the fake titles: a
+     contract question, a "don't know" question and an unrelated question
+
+    python -B -m tools.live_smoke 5     # run step 1 and only the listed steps
 
 It never reads or prints your real window titles (step 2 only looks for the
 window named "RecallPlug HUD") and writes no files (metrics are switched off;
@@ -325,6 +329,44 @@ def step_engine(ollama_running: bool) -> None:
     record(name, "PASS" if lines_ok and model_used and huds else "FAIL", detail)
 
 
+# ------------------------------------------------------------ step 5
+ASK_CASES = (
+    ("Which contract file did I have open?", "contains 'Contract Draft'",
+     lambda r: "contract draft" in r.text.lower() and r.source in ("model", "list")),
+    ("What was the total price in the supplier quote?", "the don't-know sentence",
+     lambda r: r.text == "I don't know from the recent windows."),
+    ("What is the capital of France?", "the refusal sentence",
+     lambda r: r.text == "I can only answer questions about your recent windows."),
+)
+
+
+def step_ask(ollama_running: bool) -> None:
+    name = "5 ask (real Ollama)"
+    if not ollama_running:
+        record(name, "SKIP", "Ollama is not running")
+        return
+    from app.ask import ask
+    from app.engine import RecallEngine
+
+    cfg = smoke_cfg()
+    cfg.backend = "ollama"
+    titles = iter(FAKE_TITLES)
+    engine = RecallEngine(cfg, get_title=lambda: next(titles), get_idle=lambda: 0.0,
+                          launch_hud=lambda *a: None)
+    for _ in FAKE_TITLES:
+        engine.observe()                                # real cleaning + masking
+    snapshot = engine.snapshot()
+    parts, ok = [], True
+    for question, expect, check in ASK_CASES:
+        t0 = time.monotonic()
+        r = ask(question, snapshot, None, cfg)
+        good = check(r)
+        ok = ok and good
+        parts.append(f"Q: {question} -> [{r.source}] {r.text!r} cited={list(r.cited)} "
+                     f"({time.monotonic() - t0:.1f}s, expected {expect}: {'ok' if good else 'NO'})")
+    record(name, "PASS" if ok else "FAIL", " || ".join(parts))
+
+
 def main() -> int:
     enable_dpi_awareness()
     print("RecallPlug live smoke test - windows may flash and a beep may play.\n", flush=True)
@@ -333,8 +375,13 @@ def main() -> int:
     except Exception as exc:
         record("1 self-check (real Ollama)", "FAIL", f"crashed: {type(exc).__name__}: {exc}")
         ollama = False
-    for step, label in ((step_hud, "2 recap window"), (step_hotkey, "3 Ctrl+Alt+P hotkey"),
-                        (lambda: step_engine(ollama), "4 engine + real Ollama")):
+    steps = ((step_hud, "2 recap window"), (step_hotkey, "3 Ctrl+Alt+P hotkey"),
+             (lambda: step_engine(ollama), "4 engine + real Ollama"),
+             (lambda: step_ask(ollama), "5 ask (real Ollama)"))
+    only = [a for a in sys.argv[1:] if a.isdigit()]
+    for step, label in steps:
+        if only and label.split()[0] not in only:
+            continue
         try:
             step()
         except Exception as exc:

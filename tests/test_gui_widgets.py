@@ -169,5 +169,54 @@ class WindowTests(unittest.TestCase):
         self.assertTrue(made[0].stopped)
 
 
+    def test_ask_runs_in_a_worker_and_shows_the_answer(self):
+        from app.ask import AskResult
+        seen = []
+
+        def fake_ask(question, snapshot, backend, cfg):
+            seen.append((question, threading.current_thread().name, len(snapshot.recent)))
+            return AskResult("You had Contract Draft v2.txt open [1].", "model", (1,))
+
+        app = self.App(self.root, self.cfg, skip_check=True, engine_factory=self.factory,
+                       hotkey_factory=None, ask_fn=fake_ask, poll_ms=50, drain_ms=20)
+        app.start()
+        pump(self.root, 2, lambda: app.recent_list.size() == 3)
+        self.assertEqual(str(app.ask_button.cget("state")), "disabled")     # empty question
+        app.question_var.set("Which contract file did I have open?")
+        app.render()
+        self.assertEqual(str(app.ask_button.cget("state")), "normal")
+        app.on_ask()
+        self.assertTrue(pump(self.root, 3, lambda: "Contract Draft" in
+                             app.answer_text.get("1.0", "end")))
+        self.assertEqual(seen[0][1], "RecallPlug-ask")
+        self.assertEqual(seen[0][2], 3)
+        labels = [w.cget("text") for w in app.ask_entry.master.master.winfo_children()
+                  if w.winfo_class() == "Label"]
+        self.assertIn("AI answer, may be wrong", labels)
+        app.close()
+
+    def test_ask_timeout_message(self):
+        from app.ask import AskResult
+        gate = threading.Event()
+
+        def slow_ask(*a):
+            gate.wait(5)
+            return AskResult("late [1].", "model", (1,))
+
+        app = self.App(self.root, self.cfg, skip_check=True, engine_factory=self.factory,
+                       hotkey_factory=None, ask_fn=slow_ask, ask_timeout_ms=200,
+                       poll_ms=50, drain_ms=20)
+        app.start()
+        pump(self.root, 2, lambda: app.recent_list.size() >= 1)
+        app.question_var.set("Did I read the notes?")
+        app.on_ask()
+        self.assertIn("Thinking...", app.answer_text.get("1.0", "end"))
+        self.assertTrue(pump(self.root, 3, lambda: "took too long" in app.answer_text.get("1.0", "end")))
+        gate.set()
+        pump(self.root, 0.3)
+        self.assertIn("took too long", app.answer_text.get("1.0", "end"))
+        app.close()
+
+
 if __name__ == "__main__":
     unittest.main()

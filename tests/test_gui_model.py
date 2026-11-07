@@ -185,5 +185,51 @@ class ButtonRuleTests(unittest.TestCase):
         self.assertEqual(labels["model"][0], "Model: off (mock backend)")
 
 
+class AskStateTests(unittest.TestCase):
+    def setUp(self):
+        from app.ask import AskResult
+        self.AskResult = AskResult
+        self.p = Presenter(Config(), skip_check=True)
+        self.p.engine_running()
+
+    def test_ask_enabled_rules(self):
+        p = Presenter(Config(), skip_check=True)
+        self.assertFalse(p.ask_enabled("Which files?"))          # engine not started
+        self.assertFalse(self.p.ask_enabled("   "))
+        self.assertTrue(self.p.ask_enabled("Which files?"))
+        self.p.start_ask()
+        self.assertFalse(self.p.ask_enabled("Which files?"))     # busy
+
+    def test_thinking_then_answer(self):
+        ask_id = self.p.start_ask()
+        self.assertEqual(self.p.ask_answer, "Thinking...")
+        self.p.post("ask_done", ask_id, self.AskResult("It was [1].", "model", (1,)))
+        self.p.drain()
+        self.assertEqual((self.p.ask_answer, self.p.ask_source, self.p.ask_busy),
+                         ("It was [1].", "model", False))
+
+    def test_timeout_and_late_answer_is_ignored(self):
+        from app.gui_model import ASK_TIMEOUT_TEXT
+        ask_id = self.p.start_ask()
+        self.assertTrue(self.p.ask_timeout(ask_id))
+        self.assertEqual(self.p.ask_answer, ASK_TIMEOUT_TEXT)
+        self.assertFalse(self.p.ask_busy)
+        self.p.post("ask_done", ask_id, self.AskResult("late", "model", (1,)))
+        self.p.drain()
+        self.assertEqual(self.p.ask_answer, ASK_TIMEOUT_TEXT)
+        self.assertFalse(self.p.ask_timeout(ask_id))             # only once
+
+    def test_timer_of_an_old_request_does_nothing(self):
+        first = self.p.start_ask()
+        self.p.post("ask_done", first, self.AskResult("a [1].", "model", (1,)))
+        self.p.drain()
+        second = self.p.start_ask()
+        self.assertFalse(self.p.ask_timeout(first))
+        self.assertTrue(self.p.ask_busy)
+        self.p.post("ask_done", second, self.AskResult("b [1].", "model", (1,)))
+        self.p.drain()
+        self.assertEqual(self.p.ask_answer, "b [1].")
+
+
 if __name__ == "__main__":
     unittest.main()
