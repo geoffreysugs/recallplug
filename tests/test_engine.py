@@ -356,3 +356,58 @@ class ThreadTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MetricsFileTests(unittest.TestCase):
+    """Ordinary runs must never create or modify the tracked bench/metrics.csv."""
+
+    def test_default_metrics_path_is_outside_bench(self):
+        from pathlib import Path
+        root = Path(__file__).resolve().parent.parent
+        path = Path(Config().metrics_csv)
+        self.assertTrue(path.is_absolute())
+        self.assertEqual(path, root / "logs" / "metrics.csv")
+
+    def test_engine_run_with_default_config_leaves_bench_metrics_alone(self):
+        import os
+        import tempfile
+        from pathlib import Path
+        from unittest import mock
+        from app import summarizer
+
+        bench_csv = Path(__file__).resolve().parent.parent / "bench" / "metrics.csv"
+        before = bench_csv.stat() if bench_csv.exists() else None
+        written = []
+        with tempfile.TemporaryDirectory() as tmp:
+            real = summarizer.log_metrics
+
+            def redirect(path, metrics):          # record the path, write to temp instead
+                written.append(path)
+                real(os.path.join(tmp, "m.csv"), metrics)
+
+            cfg = Config()                          # default metrics_csv, model on
+            cfg.away_s = 10
+            desk = FakeDesk()
+            events = []
+            engine = RecallEngine(cfg, get_title=desk.get_title, get_idle=desk.get_idle,
+                                  clock=desk.clock, backend=MockBackend(cfg),
+                                  launch_hud=lambda *a: None, on_event=events.append)
+            with mock.patch.object(summarizer, "log_metrics", redirect):
+                engine._running = True
+                engine.step()
+                desk.idle = 20
+                engine.step()
+                wait_worker(engine)
+                desk.idle = 0
+                engine.step()
+                engine.recap_now()                 # the --preview path
+        self.assertEqual(len([e for e in events if isinstance(e, RecapReady)]), 2)
+        self.assertEqual(len(written), 2)
+        for path in written:
+            self.assertNotIn("bench", Path(path).parts)
+            self.assertEqual(Path(path).parent.name, "logs")
+        after = bench_csv.stat() if bench_csv.exists() else None
+        if before is None:
+            self.assertIsNone(after)
+        else:
+            self.assertEqual((before.st_size, before.st_mtime_ns), (after.st_size, after.st_mtime_ns))

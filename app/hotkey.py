@@ -59,8 +59,12 @@ class Win32HotkeyApi:
         msg = self._wintypes.MSG()
         self.user32.PeekMessageW(ctypes.byref(msg), None, WM_USER, WM_USER, PM_NOREMOVE)
 
+    last_error = 0               # Win32 error code of the last failed register()
+
     def register(self, hotkey_id: int, modifiers: int, vk: int) -> bool:
-        return bool(self.user32.RegisterHotKey(None, hotkey_id, modifiers, vk))
+        ok = bool(self.user32.RegisterHotKey(None, hotkey_id, modifiers, vk))
+        self.last_error = 0 if ok else ctypes.get_last_error()   # 1409 = already registered
+        return ok
 
     def unregister(self, hotkey_id: int) -> None:
         self.user32.UnregisterHotKey(None, hotkey_id)
@@ -94,6 +98,7 @@ class GlobalHotkey:
         self._ready = threading.Event()
         self._registered = False
         self.error: Optional[str] = None
+        self.win32_error = 0      # GetLastError() after a failed RegisterHotKey
 
     @property
     def registered(self) -> bool:
@@ -114,6 +119,8 @@ class GlobalHotkey:
             self._thread_id = api.thread_id()
             api.ensure_queue()
             self._registered = api.register(self._id, self._modifiers, self._vk)
+            if not self._registered:
+                self.win32_error = int(getattr(api, "last_error", 0) or 0)
         except Exception as exc:
             self.error = type(exc).__name__
             self._registered = False

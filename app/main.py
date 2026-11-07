@@ -89,8 +89,10 @@ def start_pause_hotkey(engine: RecallEngine, hotkey_factory=hotkey.GlobalHotkey,
     if hk.start():
         say(f"Pause hotkey: {hotkey.PAUSE_LABEL} pauses and resumes logging.")
         return hk
+    code = getattr(hk, "win32_error", 0)
     say(f"warning: the pause hotkey {hotkey.PAUSE_LABEL} could not be registered "
-        "(another program may use it); continuing without it.")
+        + (f"(Win32 error {code}; " if code else "(")
+        + "another program may use it); continuing without it.")
     return None
 
 

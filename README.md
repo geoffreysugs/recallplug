@@ -63,7 +63,11 @@ All inference sits behind one interface (`OllamaBackend` and a mock backend for 
 - Block list and masking of emails, phone numbers and card numbers
 - Recap window at the bottom right, fed over standard input
 - Model interface with Ollama and a mock backend, plus a CPU-only option for measurements
-- Benchmark script, vision evaluation tool, and 168 automated tests
+- Start-up self-check, with an optional model download through Ollama
+- Pause hotkey (Ctrl+Alt+P)
+- Editable block list in `config/blocklist.txt`
+- `run.bat` launcher
+- Benchmark script, vision evaluation tool, and 240 automated tests
 
 **Target (not built yet)**
 
@@ -118,6 +122,8 @@ Notes: CPU and RAM are whole-computer averages during the call. The laptop has a
 
 Requirements: Windows 11, Python 3.12 and [Ollama](https://ollama.com) running locally with the model pulled (`ollama pull qwen2.5:1.5b`). `pip install -r requirements.txt` is optional (`psutil`, for CPU and RAM numbers). The first-launch download described above is a target; for now the model is pulled by hand.
 
+Double-click run.bat (or run_demo.bat for the 10-second demo). While it runs, Ctrl+Alt+P pauses and resumes window logging.
+
 ```text
 python -m app.main                       # run with real timers (away after 5 min idle)
 python -m app.main --preview 15          # log windows for 15 s, then show the recap now
@@ -126,6 +132,8 @@ python -m app.main --preview 25 --debug  # also print the raw model answer and w
 python -m app.main --backend mock        # ollama (default) | mock | hailo (stub that falls back to Ollama)
 python -m app.main --no-model            # rule-based lines only, no model call
 python -m app.main --cpu-only            # ask Ollama not to use the GPU
+python -m app.main --yes                 # if the model is missing, download it through Ollama without asking
+python -m app.main --blocklist PATH      # use another block list file (default config/blocklist.txt)
 python -m app.hud --sample               # show the recap window with sample text
 
 python -m bench.run_bench --runs 30      # benchmark both fake scenarios (office, web_heavy)
@@ -133,7 +141,7 @@ python -m bench.run_bench --runs 10 --cpu-only
 python -m bench.run_bench --runs 10 --no-model
 python -m tools.vision_eval              # vision model check on a folder of screenshots (results are written outside the repo)
 
-python -m unittest -v                    # run the 168 tests
+python -m unittest -v                    # run the 240 tests
 ```
 
 Benchmark results are saved to `bench/results/<timestamp>/` (`results.csv`, `summary.md`); `bench/summary.md` is the latest summary. No window titles or model answers are written to any file.

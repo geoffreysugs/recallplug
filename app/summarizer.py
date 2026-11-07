@@ -6,7 +6,7 @@ model (backend chosen in cfg.backend, see app/inference/) writes bullet 2
 call. Each model sentence is checked, tidied and, if too long, condensed
 once; a sentence that fails is replaced by a rule-based one. Nothing is ever
 cut off with "...". With cfg.use_model = False no model is called at all.
-Timing numbers from every model call are saved to bench/metrics.csv.
+Timing numbers from every model call are saved to logs/metrics.csv (git-ignored).
 """
 from __future__ import annotations
 

@@ -94,6 +94,21 @@ class GlobalHotkeyTests(unittest.TestCase):
         self.assertTrue(wait_for(lambda: not hk._thread.is_alive()))
         hk.stop()                                              # harmless
 
+    def test_registration_failure_keeps_the_win32_error_code(self):
+        api = FakeApi(register_ok=False)
+        api.last_error = 1409                     # ERROR_HOTKEY_ALREADY_REGISTERED
+        hk = hotkey.GlobalHotkey(lambda: None, api_factory=lambda: api)
+        self.assertFalse(hk.start())
+        self.assertEqual(hk.win32_error, 1409)
+        engine = RecallEngine(Config(), get_title=lambda: "", get_idle=lambda: 0.0,
+                              launch_hud=lambda *a: None)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            app_main.start_pause_hotkey(
+                engine, hotkey_factory=lambda cb: hotkey.GlobalHotkey(cb, api_factory=lambda: api),
+                beep=lambda p: None)
+        self.assertIn("Win32 error 1409", out.getvalue())
+
     def test_api_that_cannot_load_returns_false(self):
         def broken():
             raise OSError("no user32")

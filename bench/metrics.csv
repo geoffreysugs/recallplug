@@ -1,2 +1,0 @@
-timestamp,model,load_s,ttft_approx_s,tokens,tokens_per_s,wall_s,host_cpu_pct,host_cpu_peak_pct,host_ram_pct,label,output_used,bullets_replaced,condense_retries,next_names_last_two,cpu_only
-2026-10-26 11:39:09,qwen2.5:1.5b,2.614,2.742,17,136.67,2.932,16.9,36.1,29.8,"MEASURED (host, Ollama)",model,0,0,false,false

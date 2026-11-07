@@ -225,3 +225,8 @@ data/
 *.jpg
 *.png
 !docs/*.png
+
+# Local output of ordinary runs (timing numbers, exports); never committed
+logs/
+exports/
+bench/metrics.csv
