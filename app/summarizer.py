@@ -101,9 +101,71 @@ def condense_prompt(sentence: str) -> str:
 
 
 # ------------------------------------------------------------ clean-up
-def cap_text(text: str, limit: int) -> str:
+_SPLIT_EXT = re.compile(
+    r"(?<=[^\W_])\. (txt|docx?|xlsx?|csv|pdf|py|md|pptx?|json|html?)(?![^\W_])", re.I)
+_CLEAN_END_WORDS = {"the", "a", "an", "and", "or", "for", "of", "to", "in", "on", "at",
+                    "with", "by", "from", "your", "you"}
+
+
+def join_file_names(text: str) -> str:
+    """'Contract Draft v2. txt.' -> 'Contract Draft v2.txt.' (a model sometimes
+    puts a space after the dot of a file extension). Only common extensions."""
+    return _SPLIT_EXT.sub(r".\1", text)
+
+
+_NAME_WITH_EXT = re.compile(r"^(.*[^\W_])\.(txt|docx?|xlsx?|csv|pdf|py|md|pptx?|json|html?)$",
+                            re.I)
+
+
+def restore_extension(text: str, entries: list[Entry]) -> str:
+    """'... in the Contract Draft v2.' -> '... in the Contract Draft v2.txt.' when
+    the line ENDS with a recent window's file name minus its extension, in the
+    same case (the model read the extension's dot as the end of the sentence).
+    Same case only, so plain words like '... the team roster.' stay prose."""
+    for e in entries:
+        m = _NAME_WITH_EXT.match(short_title(e.title))
+        if not m:
+            continue
+        stem, ext = m.group(1), m.group(2)
+        new = re.sub(r"(?<![\w.])(" + re.escape(stem) + r")\.(\s*)$",
+                     lambda k: f"{k.group(1)}.{ext}.{k.group(2)}", text)
+        if new != text:
+            return new
+    return text
+
+
+def cap_text(text: str, limit: int, keep: tuple[str, ...] = ()) -> str:
+    """Shortens to at most `limit` characters, ending in '...'. The cut falls
+    between words, never inside a word, a file name or one of the `keep`
+    phrases (e.g. window titles), and dangling words like 'in the' or
+    punctuation before the '...' are dropped. A single word longer than the
+    limit is the only thing ever cut hard."""
     text = " ".join(text.split())
-    return text if len(text) <= limit else text[: limit - 3].rstrip() + "..."
+    if len(text) <= limit:
+        return text
+    room = limit - 3
+    cut = room
+    if text[room] != " ":                       # inside a word: back up to its start
+        space = text.rfind(" ", 0, room + 1)
+        cut = space if space > 0 else room
+    low = text.lower()
+    for phrase in keep:                         # never split a protected phrase
+        p = phrase.lower().strip()
+        if not p:
+            continue
+        start = low.find(p)
+        while start != -1:
+            if start < cut < start + len(p):
+                cut = start
+            start = low.find(p, start + 1)
+    if cut <= 0:
+        cut = room
+    head = text[:cut].rstrip(" ,;:-–—|/(")
+    words = head.split(" ")
+    while len(words) > 1 and words[-1].lower() in _CLEAN_END_WORDS:
+        words.pop()
+    head = " ".join(words).rstrip(" ,;:-–—|/(.")
+    return (head or text[:room]) + "..."
 
 
 def _comparable(text: str) -> str:
@@ -122,6 +184,7 @@ def sanitize_bullets(raw: str, cfg: Config, entries: list[Entry] = (),
     copies |= {_comparable(window_label(e.title, e.app)) for e in entries}
     example = [t.lower() for t in EXAMPLE_TITLES]
     example_line = _comparable(_EXAMPLE_WORK)
+    keep = tuple({short_title(e.title) for e in entries})
 
     def drop(why: str, line: str) -> None:
         if dropped is not None and line.strip():
@@ -147,7 +210,8 @@ def sanitize_bullets(raw: str, cfg: Config, entries: list[Entry] = (),
         if any(t in line.lower() for t in example) or _comparable(line) == example_line:
             drop("copied from the prompt example", line)
             continue
-        bullets.append(cap_text(line, cfg.max_bullet_chars) if cap else " ".join(line.split()))
+        bullets.append(cap_text(line, cfg.max_bullet_chars, keep) if cap
+                       else " ".join(line.split()))
         if len(bullets) == cfg.max_bullets:
             break
     return bullets
@@ -337,8 +401,10 @@ def _model_sentence(kind: str, body: str | None, entries: list[Entry], cfg: Conf
         debug["replaced"].append(f"bullet {n} replaced: {why}")
 
     def check(raw_body: str) -> tuple[str, str | None]:
+        raw_body = join_file_names(raw_body)          # 'v2. txt' -> 'v2.txt'
         why = check_work(raw_body, entries) if kind == "work" else None
-        text = _show(kind, tidy_titles(raw_body, entries))
+        shown = restore_extension(raw_body, entries)  # '... Draft v2.' -> '... Draft v2.txt.'
+        text = _show(kind, tidy_titles(shown, entries))
         if why is None and kind == "next":
             why = check_next(text, entries, cfg)
         return text, why
