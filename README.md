@@ -16,7 +16,7 @@ Recall Plug is a small Windows app that answers one question the moment you sit 
 
 ![A short session: windows appear, pause, recap, one question](docs/demo.gif)
 
-**Competition materials:** [slides](docs/competition/RecallPlug_Stage1_Presentation.pdf) · [demo video](https://youtu.be/2AHc7LLyFRg). The slides describe the competition plan, which targets the ASUS UGen300. This repository's current scope is the Windows app that runs with Ollama.
+**Competition materials:** [slides](docs/competition/RecallPlug_Stage1_Presentation.pdf). The slides describe the competition plan, which targets the ASUS UGen300. This repository's current scope is the Windows app that runs with Ollama.
 
 Entry for the **ASUS UGen AI League**: Battlefield Lightning · Workplace AI · Onsite track. The competition version is frozen at the tag `stage1-submitted`.
 
