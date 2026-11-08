@@ -1,3 +1,4 @@
+English | [繁體中文](README.zh-TW.md)
 # Recall Plug
 
 [![tests](https://github.com/geoffreysugs/recallplug/actions/workflows/tests.yml/badge.svg)](https://github.com/geoffreysugs/recallplug/actions/workflows/tests.yml)
