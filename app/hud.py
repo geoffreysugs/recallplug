@@ -13,21 +13,44 @@ import subprocess
 import sys
 from pathlib import Path
 
-from .win_api import enable_dpi_awareness
+from .win_api import enable_dpi_awareness, get_work_area
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 WIDTH = 440
-TASKBAR_MARGIN = 68    # keeps the window above the Windows taskbar
+TASKBAR_MARGIN = 68    # fallback only: keeps the window above a bottom taskbar
+WORK_AREA_MARGIN = 8   # gap to the work area's bottom-right corner
 MIN_HEIGHT = 150
 MAX_SCREEN_SHARE = 0.5  # the window never grows taller than half the screen
 BULLET_FONT_SIZE = 11
 
 
-def hud_geometry(wanted_height: int, screen_w: int, screen_h: int) -> tuple[int, int, int, int]:
+def _usable(area, screen_w: int, screen_h: int) -> bool:
+    """A work area we can trust: 4 numbers, non-empty and inside the screen."""
+    try:
+        left, top, right, bottom = (int(v) for v in area)
+    except (TypeError, ValueError):
+        return False
+    return (0 <= left < right <= screen_w and 0 <= top < bottom <= screen_h
+            and right - left >= WIDTH + 2 * WORK_AREA_MARGIN and bottom - top >= MIN_HEIGHT)
+
+
+def hud_geometry(wanted_height: int, screen_w: int, screen_h: int,
+                 work_area: tuple[int, int, int, int] | None = None) -> tuple[int, int, int, int]:
     """(width, height, x, y). Height follows the text between MIN_HEIGHT and
-    half the screen; the bottom edge stays fixed above the taskbar, so a
-    taller window grows UPWARD."""
+    half the screen; the bottom edge stays fixed, so a taller window grows
+    UPWARD.
+
+    With a usable work area (the screen without the taskbar, wherever the
+    taskbar is) the window sits WORK_AREA_MARGIN px inside its bottom-right
+    corner. Without one it falls back to the old fixed TASKBAR_MARGIN above
+    the screen bottom."""
     height = min(int(screen_h * MAX_SCREEN_SHARE), max(MIN_HEIGHT, wanted_height))
+    if work_area is not None and _usable(work_area, screen_w, screen_h):
+        left, top, right, bottom = (int(v) for v in work_area)
+        height = min(height, bottom - top - 2 * WORK_AREA_MARGIN)
+        x = right - WIDTH - WORK_AREA_MARGIN
+        y = bottom - height - WORK_AREA_MARGIN
+        return WIDTH, height, x, y
     x = screen_w - WIDTH - 20
     y = screen_h - height - TASKBAR_MARGIN
     return WIDTH, height, x, y
@@ -92,11 +115,12 @@ def show_hud(title: str, bullets: list[str], seconds: int = 15) -> None:
              anchor="w").pack(fill="x", pady=(8, 0))
 
     # Height follows the text (no scrollbar, no close button). The bottom edge
-    # stays fixed above the taskbar, so longer text grows the window UPWARD.
-    # DPI awareness is on, so winfo_screenheight() is the real screen height.
+    # stays fixed just inside the work area (above or beside the taskbar), so
+    # longer text grows the window UPWARD. DPI awareness is on (set before
+    # tk.Tk()), so the screen size and the work area are both real pixels.
     root.update_idletasks()
     w, h, x, y = hud_geometry(root.winfo_reqheight(), root.winfo_screenwidth(),
-                              root.winfo_screenheight())
+                              root.winfo_screenheight(), get_work_area())
     root.geometry(f"{w}x{h}+{x}+{y}")
 
     def close(_event=None):

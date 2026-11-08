@@ -80,5 +80,79 @@ class HudLaunchTests(unittest.TestCase):
         self.assertEqual(show.call_args.args, (TITLE, BULLETS, 9))
 
 
+class HudWorkAreaTests(unittest.TestCase):
+    """hud_geometry with a faked work area (no real screen is read)."""
+    M = hud.WORK_AREA_MARGIN
+
+    def place(self, area, wanted=200, screen=(1920, 1080)):
+        w, h, x, y = hud.hud_geometry(wanted, *screen, work_area=area)
+        return w, h, x, y, x + w, y + h
+
+    def assertInside(self, area, right, bottom, x, y):
+        self.assertEqual(right, area[2] - self.M)
+        self.assertEqual(bottom, area[3] - self.M)
+        self.assertGreaterEqual(x, area[0])
+        self.assertGreaterEqual(y, area[1])
+
+    def test_normal_taskbar_at_the_bottom(self):
+        area = (0, 0, 1920, 1032)                         # 48 px taskbar
+        w, h, x, y, right, bottom = self.place(area)
+        self.assertEqual((w, h, x, y), (440, 200, 1472, 824))
+        self.assertInside(area, right, bottom, x, y)
+
+    def test_taller_taskbar(self):
+        area = (0, 0, 1920, 960)                          # 120 px, two rows
+        w, h, x, y, right, bottom = self.place(area)
+        self.assertEqual(bottom, 952)                     # the old fixed margin gave 1012
+        self.assertInside(area, right, bottom, x, y)
+
+    def test_taskbar_on_the_right(self):
+        area = (0, 0, 1860, 1080)
+        w, h, x, y, right, bottom = self.place(area)
+        self.assertEqual((x, right, bottom), (1412, 1852, 1072))
+        self.assertInside(area, right, bottom, x, y)
+
+    def test_taskbar_on_top_or_left_keeps_the_corner(self):
+        for area in ((0, 40, 1920, 1080), (60, 0, 1920, 1080)):
+            _w, _h, x, y, right, bottom = self.place(area)
+            self.assertInside(area, right, bottom, x, y)
+
+    def test_grows_upward_and_stays_in_the_work_area(self):
+        area = (0, 0, 1920, 1032)
+        bottoms = {self.place(area, wanted)[5] for wanted in (50, 200, 400, 5000)}
+        self.assertEqual(bottoms, {1032 - self.M})
+        _w, h, _x, y, _r, _b = self.place(area, 5000)
+        self.assertEqual(h, 540)                          # still half the screen at most
+        small = (0, 0, 1920, 400)                         # tiny work area: height is capped
+        _w, h, _x, y, _r, bottom = self.place(small, 5000)
+        self.assertEqual((y, bottom), (self.M, 400 - self.M))
+
+    def test_falls_back_to_the_old_rule(self):
+        old = hud.hud_geometry(200, 1920, 1080)
+        for bad in (None, (0, 0, 0, 0), (0, 0, 5000, 1080), (10, 10, 5, 5), "x", (1, 2, 3)):
+            self.assertEqual(hud.hud_geometry(200, 1920, 1080, work_area=bad), old, bad)
+        self.assertEqual(old[3] + old[1], 1080 - hud.TASKBAR_MARGIN)
+
+
+class WorkAreaApiTests(unittest.TestCase):
+    def test_not_windows_gives_none(self):
+        from app import win_api
+        with mock.patch.object(win_api, "IS_WINDOWS", False):
+            self.assertIsNone(win_api.get_work_area())
+
+    def test_failed_call_gives_none(self):
+        from app import win_api
+        if not win_api.IS_WINDOWS:
+            self.skipTest("needs Windows")
+        user32 = mock.Mock()
+        user32.SystemParametersInfoW.return_value = 0
+        with mock.patch.object(win_api.ctypes, "windll", mock.Mock(user32=user32)):
+            self.assertIsNone(win_api.get_work_area())
+
+    def test_show_hud_uses_the_work_area(self):
+        import inspect
+        self.assertIn("get_work_area()", inspect.getsource(hud.show_hud))
+
+
 if __name__ == "__main__":
     unittest.main()
